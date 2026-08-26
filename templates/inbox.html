@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>文件治理收件箱</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
+  background: #f5f5f7;
+  color: #1d1d1f;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 20px;
+}
+.container { max-width: 720px; width: 100%; }
+h1 {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  margin-bottom: 8px;
+}
+.subtitle { color: #86868b; font-size: 15px; margin-bottom: 32px; }
+.drop-zone {
+  background: white;
+  border: 2px dashed #d2d2d7;
+  border-radius: 16px;
+  padding: 60px 40px;
+  text-align: center;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+.drop-zone.dragover {
+  border-color: #0071e3;
+  background: #f0f7ff;
+  transform: scale(1.01);
+}
+.drop-zone .icon { font-size: 48px; margin-bottom: 16px; opacity: 0.6; }
+.drop-zone h2 { font-size: 20px; font-weight: 600; margin-bottom: 8px; }
+.drop-zone p { color: #86868b; font-size: 14px; }
+.stats {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+}
+.stat-card {
+  flex: 1;
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  text-align: center;
+}
+.stat-card .num { font-size: 28px; font-weight: 700; color: #1d1d1f; }
+.stat-card .label { font-size: 12px; color: #86868b; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+.log {
+  margin-top: 24px;
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  max-height: 200px;
+  overflow-y: auto;
+  font-family: "SF Mono", monospace;
+  font-size: 12px;
+  color: #6e6e73;
+  display: none;
+}
+.log.show { display: block; }
+.log-entry { padding: 4px 0; border-bottom: 1px solid #f5f5f7; }
+.log-entry:last-child { border-bottom: none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>📥 文件治理收件箱</h1>
+  <p class="subtitle">拖拽文件到下方区域，自动沉淀到飞书知识库</p>
+  <div class="drop-zone" id="dropZone">
+    <div class="icon">📁</div>
+    <h2>拖拽文件到此处</h2>
+    <p>或点击选择文件 · 支持任意格式 · 自动分类归档</p>
+    <input type="file" id="fileInput" multiple style="display:none">
+  </div>
+  <div class="stats">
+    <div class="stat-card"><div class="num" id="totalCount">-</div><div class="label">总计</div></div>
+    <div class="stat-card"><div class="num" id="doneCount">-</div><div class="label">已完成</div></div>
+    <div class="stat-card"><div class="num" id="failedCount">-</div><div class="label">失败</div></div>
+  </div>
+  <div class="log" id="log"></div>
+</div>
+<script>
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const logEl = document.getElementById('log');
+
+function log(msg) {
+  logEl.classList.add('show');
+  const div = document.createElement('div');
+  div.className = 'log-entry';
+  div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function uploadFiles(files) {
+  const formData = new FormData();
+  for (const f of files) formData.append('files', f);
+  log(`上传 ${files.length} 个文件...`);
+  try {
+    const resp = await fetch('/api/upload', { method: 'POST', body: formData });
+    const data = await resp.json();
+    log(`已保存 ${data.count} 个文件，后台自动处理中`);
+    setTimeout(refreshStats, 2000);
+  } catch (e) {
+    log(`上传失败: ${e.message}`);
+  }
+}
+
+async function refreshStats() {
+  try {
+    const resp = await fetch('/api/stats');
+    const s = await resp.json();
+    document.getElementById('totalCount').textContent = s.total || 0;
+    document.getElementById('doneCount').textContent = s.done || 0;
+    document.getElementById('failedCount').textContent = s.failed || 0;
+  } catch(e) {}
+}
+
+dropZone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', e => uploadFiles(e.target.files));
+['dragenter','dragover'].forEach(ev => dropZone.addEventListener(ev, e => {
+  e.preventDefault(); dropZone.classList.add('dragover');
+}));
+['dragleave','drop'].forEach(ev => dropZone.addEventListener(ev, e => {
+  e.preventDefault(); dropZone.classList.remove('dragover');
+}));
+dropZone.addEventListener('drop', e => uploadFiles(e.dataTransfer.files));
+refreshStats();
+setInterval(refreshStats, 5000);
+</script>
+</body>
+</html>

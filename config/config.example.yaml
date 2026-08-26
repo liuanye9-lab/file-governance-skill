@@ -1,0 +1,89 @@
+# File Governance Skill 配置文件
+# 复制此文件为 ../config.yaml 并填入实际配置
+
+sources:
+  # 微信本地目录扫描（可选，默认关闭，填入路径后启用）
+  wechat:
+    enabled: false
+    # Mac 微信新版消息附件路径示例（需替换为实际 wxid 路径）：
+    # ~/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/<wxid>/msg/attach/<chat_id>/<yyyy-mm>
+    base_path: ""
+    fixed_chat_path: ""
+    watch_sessions:
+      - "文件传输助手"
+
+  # 本地拖拽收件箱（默认启用）
+  inbox:
+    enabled: true
+    path: "./inbox"
+    web_ui:
+      enabled: false
+      host: "127.0.0.1"
+      port: 8765
+
+  # 额外监控的本地目录列表
+  local_folders: []
+  # 示例：
+  # - path: "~/Downloads"
+  #   name: "下载目录"
+  #   recursive: false
+  # - path: "~/Desktop/工作资料"
+  #   name: "桌面资料"
+  #   recursive: true
+
+feishu:
+  provider: "cli"  # 使用 lark-cli OAuth，不保存应用密钥
+  cli_path: ""    # 留空自动发现
+  drive:
+    root_folder: "知识沉淀"
+    auto_create_folders: true
+  bitable:
+    enabled: true
+    base_token: ""          # 飞书多维表格 Base Token（URL中 base/ 后的字符串）
+    knowledge_table_id: ""  # "知识材料"表 ID
+    agent_context_table_id: ""  # "Agent上下文窗口"表 ID
+    dashboard_id: ""        # Dashboard ID（可选）
+    url: ""                 # Bitable 完整 URL，用于卡片跳转
+
+knowledge:
+  project_name: "默认项目"
+  excerpt_length: 1200
+
+taxonomy:
+  categories:
+    - name: "运营SOP"
+      sub: ["岗位手册", "服务流程", "部门运营"]
+      keywords: ["SOP", "手册", "岗位", "流程", "运营"]
+    - name: "制度与安全"
+      sub: ["规章制度", "安全管理", "应急预案"]
+      keywords: ["制度", "安全", "应急", "消防", "奖惩", "预案"]
+    - name: "培训与服务标准"
+      sub: ["岗位培训", "礼仪标准", "服务蓝图"]
+      keywords: ["培训", "礼仪", "标准", "蓝图"]
+    - name: "客户体验与客诉"
+      sub: ["客诉案例", "整改报告", "服务案例"]
+      keywords: ["客诉", "投诉", "整改", "客户", "案例"]
+    - name: "经营与文化"
+      sub: ["经营分析", "产品文化", "企业文化"]
+      keywords: ["绩效", "产品", "企业文化", "文化", "经营"]
+    - name: "待人工复核"
+      sub: []
+      keywords: []
+
+governance:
+  default_security_level: "L2-Internal"
+  default_share_permission: "tenant_readable"
+  enable_versioning: true
+  dedup_strategy: "hash+path"   # hash / path / hash+path
+  max_file_size_mb: 500
+
+processing:
+  max_text_length: 8000
+  ocr_enabled: false
+  link_fetch_enabled: false
+
+db:
+  path: "./data/governance.db"
+
+logging:
+  level: "INFO"
