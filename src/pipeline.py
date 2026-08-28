@@ -81,7 +81,14 @@ class GovernancePipeline:
         url_cfg.setdefault("max_file_size_mb", self.config.get("governance", {}).get("max_file_size_mb", 500))
         collector = UrlFetchCollector(url_cfg, self.db)
         records = list(collector.scan())
-        return self._process_records(records)
+        result = self._process_records(records)
+        # 汇报抓取成功率：请求地址数 vs 实际抓到并进入处理的文件数
+        requested = len(urls)
+        fetched = len(records)
+        result["fetch"] = {"requested": requested, "fetched": fetched, "unfetched": requested - fetched}
+        if fetched < requested:
+            logger.warning(f"抓取：请求 {requested} 个地址，成功 {fetched} 个，失败/未找到 {requested - fetched} 个")
+        return result
 
     def _process_records(self, all_records: list) -> dict:
         stats = {"total": len(all_records), "done": 0, "skipped": 0, "failed": 0}

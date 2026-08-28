@@ -27,6 +27,7 @@ class UrlFetchCollector(BaseCollector):
         super().__init__(config, db)
         # urls 可来自配置，也可运行时注入（CLI fetch 命令）
         self.urls = config.get("urls", []) or []
+        self.timeout = int(config.get("timeout", 60))
         download_dir = config.get("download_dir", "")
         if download_dir:
             self.download_dir = Path(download_dir).expanduser()
@@ -65,33 +66,33 @@ class UrlFetchCollector(BaseCollector):
 
     def _fetch_one(self, url: str) -> str:
         """下载/定位单个文件，返回本地路径；失败返回空串。"""
-        # 本地路径：直接使用
+        # 本地路径：直接使用（同样受大小上限约束，与 URL 分支对齐）
         if not url.lower().startswith(("http://", "https://")):
             p = Path(url).expanduser()
-            if p.is_file():
-                return str(p)
-            logger.warning(f"本地文件不存在: {url}")
-            return ""
+            if not p.is_file():
+                logger.warning(f"本地文件不存在: {url}")
+                return ""
+            try:
+                if p.stat().st_size > self.max_file_size_mb * 1024 * 1024:
+                    logger.warning(f"本地文件超过大小上限，跳过: {url}")
+                    return ""
+            except OSError:
+                return ""
+            return str(p)
         # 远程 URL：下载
         try:
-            filename = self._infer_filename(url)
-            dest = self.download_dir / filename
-            # 同名冲突则加序号
-            counter = 1
-            while dest.exists():
-                stem, suf = dest.stem, dest.suffix
-                dest = self.download_dir / f"{stem}_{counter}{suf}"
-                counter += 1
             req = urllib.request.Request(
                 url, headers={"User-Agent": "Mozilla/5.0 (file-governance-bot)"}
             )
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                # 尝试从响应头补全文件名/扩展名
-                dest = self._refine_name_from_headers(resp, dest)
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                # 先确定最终文件名（含响应头修正），再统一做冲突去重，避免改名后覆盖已有文件
+                base_dest = self.download_dir / self._infer_filename(url)
+                base_dest = self._refine_name_from_headers(resp, base_dest)
                 data = resp.read(self.max_file_size_mb * 1024 * 1024 + 1)
             if len(data) > self.max_file_size_mb * 1024 * 1024:
                 logger.warning(f"文件超过大小上限，跳过: {url}")
                 return ""
+            dest = self._dedupe_path(base_dest)
             with open(dest, "wb") as f:
                 f.write(data)
             logger.info(f"已爬取: {url} -> {dest}")
@@ -99,6 +100,15 @@ class UrlFetchCollector(BaseCollector):
         except Exception as e:
             logger.warning(f"爬取失败 {url}: {e}")
             return ""
+
+    def _dedupe_path(self, dest: Path) -> Path:
+        """若目标路径已存在则加序号，保证唯一，避免不同 URL 同名互相覆盖。"""
+        counter = 1
+        final = dest
+        while final.exists():
+            final = dest.with_name(f"{dest.stem}_{counter}{dest.suffix}")
+            counter += 1
+        return final
 
     def _infer_filename(self, url: str) -> str:
         path = urllib.parse.urlparse(url).path
