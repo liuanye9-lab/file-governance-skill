@@ -37,18 +37,22 @@ class Classifier:
         text_lower = text.lower()
 
         scores = {}
-        matched_kws = []
+        matched_by_cat = {}  # 每个分类各自命中的关键词，避免 tags 跨分类泄漏
         for cat in self.categories:
-            cat_name = cat["name"]
+            cat_name = cat.get("name")
+            if not cat_name:
+                continue
             score = 0
+            hits = []
             for kw in cat.get("keywords", []):
                 if kw and kw.lower() in text_lower:
                     score += 2
-                    matched_kws.append(kw)
+                    hits.append(kw)
             for sub in cat.get("sub", []):
                 if sub and sub.lower() in text_lower:
                     score += 1
             scores[cat_name] = score
+            matched_by_cat[cat_name] = hits
 
         best_cat = max(scores, key=scores.get) if scores else self.DEFAULT_CATEGORY
         if scores.get(best_cat, 0) == 0:
@@ -56,7 +60,7 @@ class Classifier:
 
         sub_cat = ""
         for cat in self.categories:
-            if cat["name"] == best_cat:
+            if cat.get("name") == best_cat:
                 subs = cat.get("sub", [])
                 for sub in subs:
                     if sub and sub.lower() in text_lower:
@@ -66,7 +70,8 @@ class Classifier:
                     sub_cat = subs[0]
                 break
 
-        tags = list(dict.fromkeys(matched_kws))[:10]
+        # tags 只取被选中分类命中的关键词，保证与最终分类一致
+        tags = list(dict.fromkeys(matched_by_cat.get(best_cat, [])))[:10]
         if not tags and record.file_ext:
             tags.append(record.file_ext.upper())
 

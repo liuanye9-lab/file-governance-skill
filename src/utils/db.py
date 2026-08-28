@@ -142,6 +142,18 @@ class GovernanceDB:
         ).fetchone()
         return dict(row) if row else None
 
+    def find_done_by_hash(self, file_hash: str) -> Optional[dict]:
+        """只返回已成功入库(done)的最新版本记录，用于版本去重判定。
+
+        避免 failed/pending 记录导致版本号虚增或误判为重复。
+        """
+        row = self.conn.execute(
+            "SELECT * FROM files WHERE file_hash = ? AND status = 'done' "
+            "ORDER BY version DESC LIMIT 1",
+            (file_hash,)
+        ).fetchone()
+        return dict(row) if row else None
+
     def find_by_name(self, file_name: str) -> list[dict]:
         rows = self.conn.execute(
             "SELECT * FROM files WHERE file_name = ? ORDER BY version DESC",
@@ -212,8 +224,10 @@ class GovernanceDB:
         self.conn.commit()
 
     def clear_all_records(self):
+        """全量刷新时清空本地记录，包括同步状态（否则 refresh 后 Agent 上下文无法重建）。"""
         self.conn.execute("DELETE FROM files")
         self.conn.execute("DELETE FROM versions")
+        self.conn.execute("DELETE FROM sync_state")
         self.conn.commit()
 
     def get_stats(self) -> dict:

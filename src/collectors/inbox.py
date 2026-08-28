@@ -15,10 +15,13 @@ class InboxCollector(BaseCollector):
         super().__init__(config, db)
         path = config.get("path") or config.get("inbox_path", "./inbox")
         self.inbox_path = Path(path).expanduser()
-        self.inbox_path.mkdir(parents=True, exist_ok=True)
 
     def scan(self) -> Iterator[FileRecord]:
-        if not self.inbox_path.exists():
+        # 目录创建放在 scan（而非 __init__），避免构造阶段的磁盘副作用拖垮采集器工厂。
+        try:
+            self.inbox_path.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.warning(f"收件箱目录不可用，跳过: {self.inbox_path} ({e})")
             return
         for file_path in self._iter_files(self.inbox_path):
             resolved = str(file_path.resolve())

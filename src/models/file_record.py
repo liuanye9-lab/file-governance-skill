@@ -31,6 +31,7 @@ class FileRecord:
     drive_url: str = ""
     doc_url: str = ""
     version: int = 1
+    is_new_version: bool = False
     parent_archive: Optional[str] = None
     archive_children: list[str] = field(default_factory=list)
     security_level: str = "L2-Internal"
@@ -41,6 +42,8 @@ class FileRecord:
     review_conclusion: str = ""
     error_message: str = ""
     processing_steps: list[dict] = field(default_factory=list)
+    record_id: str = ""
+    agent_record_id: str = ""
 
     @staticmethod
     def from_path(path: str, source: str, source_session: str = "") -> "FileRecord":

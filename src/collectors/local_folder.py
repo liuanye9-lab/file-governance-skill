@@ -21,10 +21,12 @@ class LocalFolderCollector(BaseCollector):
         if not self.folder_path.exists():
             logger.warning(f"监控目录不存在: {self.folder_path}")
             return
-        iterator = self.folder_path.rglob("*") if self.recursive else self.folder_path.iterdir()
+        # 递归时复用 _iter_files（会跳过隐藏父目录如 .git/.venv）；非递归仅扫直属文件。
+        if self.recursive:
+            iterator = self._iter_files(self.folder_path)
+        else:
+            iterator = (p for p in self.folder_path.iterdir() if not self._should_skip(p))
         for file_path in iterator:
-            if self._should_skip(file_path):
-                continue
             resolved = str(file_path.resolve())
             if self.db.is_path_processed(resolved):
                 continue

@@ -26,7 +26,9 @@ logger = setup_logger()
 class GovernancePipeline:
     def __init__(self, config: dict = None):
         self.config = config or load_config()
-        db_path = self.config.get("db", {}).get("path", "./data/governance.db")
+        # 默认 DB 路径锚定到 Skill 根目录，避免随当前工作目录漂移导致数据"丢失"。
+        default_db = str(SKILL_ROOT / "data" / "governance.db")
+        db_path = self.config.get("db", {}).get("path") or default_db
         self.db = GovernanceDB(db_path)
         self.collectors = get_collectors(self.config, self.db)
         self.hasher = HashProcessor()
@@ -85,7 +87,7 @@ class GovernancePipeline:
                 self.parser.process(record)
                 self.classifier.process(record)
                 upload_ok = False
-                if self.drive_pub.available:
+                if self.drive_pub.available and record.file_size > 0:
                     try:
                         self.drive_pub.upload(record)
                         upload_ok = True
@@ -96,6 +98,8 @@ class GovernancePipeline:
                             record.drive_url = existing
                             record.log_step("upload", f"复用已有链接 {existing}")
                             upload_ok = True
+                elif record.file_size <= 0:
+                    record.log_step("upload", "空文件，仅本地归档不上传", success=False)
                 if upload_ok and record.drive_url:
                     try:
                         self.permission_gov.process(record)
@@ -106,6 +110,15 @@ class GovernancePipeline:
                         self.bitable_pub.publish_record(record)
                     except Exception as e:
                         logger.warning(f"Bitable 写入失败: {e}")
+                # 需上传却未成功（非空文件且 drive 可用但上传失败）标记为 failed，便于重试
+                if self.drive_pub.available and record.file_size > 0 and not record.drive_url:
+                    record.status = "failed"
+                    record.error_message = "上传飞书失败且未找到已有文件"
+                    self.db.insert_file(record.to_dict())
+                    self.audit.log_file_complete(record)
+                    stats["failed"] += 1
+                    logger.warning("  标记为失败（待重试）")
+                    continue
                 record.status = "done"
                 self.db.insert_file(record.to_dict())
                 self.audit.log_file_complete(record)

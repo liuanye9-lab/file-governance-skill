@@ -24,12 +24,9 @@ class MetadataProcessor:
         try:
             if ext == "pdf":
                 self._extract_pdf_meta(record)
-            elif ext in ("docx", "doc"):
+            elif ext == "docx":
                 self._extract_doc_meta(record)
-            elif ext in ("pptx", "ppt"):
-                pass
-            elif ext in ("xlsx", "xls"):
-                pass
+            # .doc（老式二进制）python-docx 不支持，跳过；ppt/xls 无标准元数据接口
         except Exception as e:
             logger.debug(f"格式特定元数据提取失败 {p.name}: {e}")
 
@@ -52,6 +49,6 @@ class MetadataProcessor:
             doc = Document(record.source_path)
             core = doc.core_properties
             record.author = core.author or record.author
-            record.page_count = core.pages or record.page_count
+            # 注意：python-docx 的 CoreProperties 没有 pages 属性，页数不可从此获取
         except Exception:
             pass

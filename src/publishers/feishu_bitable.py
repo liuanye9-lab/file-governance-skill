@@ -116,8 +116,9 @@ class FeishuBitablePublisher:
         if not (self.cli_path and self.base_token and table_id):
             return 0
         deleted = 0
+        max_rounds = 200  # 防止删除静默失败导致的无限循环
         try:
-            while True:
+            for _ in range(max_rounds):
                 result = self._run_bitable([
                     "base", "records", "list", "--as", "user",
                     "--base-token", self.base_token,
@@ -126,7 +127,7 @@ class FeishuBitablePublisher:
                 items = self._find_value(result, "items") or []
                 if not items:
                     break
-                ids = [it.get("record_id") or it.get("recordId") for it in items[:50]]
+                ids = [it.get("record_id") or it.get("recordId") for it in items]
                 ids = [i for i in ids if i]
                 if not ids:
                     break
@@ -139,6 +140,8 @@ class FeishuBitablePublisher:
                 self._run_bitable(args)
                 deleted += len(ids)
                 time.sleep(0.5)
+            else:
+                logger.warning(f"clear_table 达到最大轮次 {max_rounds}，可能仍有残留记录")
         except Exception as e:
             logger.debug(f"清空表失败: {e}")
         return deleted
@@ -249,6 +252,8 @@ class FeishuBitablePublisher:
     def _run_bitable(self, args: list[str]) -> dict:
         if not self.cli_path:
             raise RuntimeError("lark-cli 不可用")
+        if "--format" not in args:
+            args = [*args, "--format", "json"]
         completed = subprocess.run(
             [self.cli_path, *args], check=False, text=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60,

@@ -24,6 +24,7 @@ class FeishuDrivePublisher:
 
     @staticmethod
     def _resolve_cli(cli_path: str) -> str:
+        """查找 lark-cli；找不到返回空串以支持本地-only 降级（不抛异常）。"""
         if cli_path and Path(cli_path).is_file():
             return cli_path
         executable = shutil.which("lark-cli")
@@ -34,13 +35,18 @@ class FeishuDrivePublisher:
         ))
         if candidates:
             return str(sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)[0])
-        raise FileNotFoundError("未找到 lark-cli，请先安装并登录飞书 CLI（npm i -g @larksuite/cli）")
+        logger.warning("未找到 lark-cli，飞书上传将被跳过（本地治理仍可用）。安装：npm i -g @larksuite/cli")
+        return ""
 
     @property
     def available(self) -> bool:
         return bool(self.cli_path)
 
     def upload(self, record: FileRecord) -> str:
+        # 飞书 API 拒绝 0 字节文件（code 1061002），提前跳过避免无谓报错。
+        if record.file_size <= 0:
+            record.log_step("upload", "空文件，跳过上传", success=False)
+            raise RuntimeError("空文件无法上传到飞书")
         root = self._get_project_root()
         category_folder = self._get_or_create_folder(
             record.category or "未分类", root
@@ -51,7 +57,7 @@ class FeishuDrivePublisher:
             result = self._run([
                 "drive", "+upload", "--file", f"./{record.file_name}",
                 "--name", record.file_name, "--folder-token", category_folder,
-                "--as", "user",
+                "--as", "user", "--format", "json",
             ], cwd=staging_dir)
         token = self._find_value(result, "file_token") or self._find_value(result, "token")
         if not token:
@@ -112,6 +118,9 @@ class FeishuDrivePublisher:
         return token
 
     def _run(self, args: list[str], cwd: str = None) -> dict:
+        # 统一保证 JSON 输出，便于解析（若调用方未显式指定）。
+        if "--format" not in args:
+            args = [*args, "--format", "json"]
         completed = subprocess.run(
             [self.cli_path, *args], check=False, text=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd, timeout=120,
