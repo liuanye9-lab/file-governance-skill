@@ -33,6 +33,17 @@ def cmd_refresh(args):
         pipeline.close()
 
 
+def cmd_fetch(args):
+    pipeline = GovernancePipeline()
+    try:
+        result = pipeline.fetch(urls=args.urls)
+        print(json.dumps(result["card"], ensure_ascii=False, indent=2))
+        if args.stats:
+            print(json.dumps(result["stats"], ensure_ascii=False, indent=2))
+    finally:
+        pipeline.close()
+
+
 def cmd_permissions(args):
     pipeline = GovernancePipeline()
     try:
@@ -73,9 +84,14 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_run = sub.add_parser("run", help="增量扫描并治理新文件")
-    p_run.add_argument("--source", default="all", choices=["all", "wechat", "inbox", "local_folder"])
+    p_run.add_argument("--source", default="all", choices=["all", "wechat", "inbox", "local_folder", "url_fetch"])
     p_run.add_argument("--stats", action="store_true", help="输出统计数据")
     p_run.set_defaults(func=cmd_run)
+
+    p_fetch = sub.add_parser("fetch", help="按文件地址自动爬取并治理沉淀（支持 URL 或本地路径）")
+    p_fetch.add_argument("urls", nargs="+", help="一个或多个文件地址（http/https URL 或本地绝对路径）")
+    p_fetch.add_argument("--stats", action="store_true", help="输出统计数据")
+    p_fetch.set_defaults(func=cmd_fetch)
 
     p_refresh = sub.add_parser("refresh", help="全量刷新：清空 Bitable 和本地状态后重跑")
     p_refresh.set_defaults(func=cmd_refresh)

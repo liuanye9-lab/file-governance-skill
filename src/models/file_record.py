@@ -23,6 +23,8 @@ class FileRecord:
     author: Optional[str] = None
     page_count: Optional[int] = None
     status: str = "pending"
+    domain: Optional[str] = None
+    doc_type: Optional[str] = None
     category: Optional[str] = None
     sub_category: Optional[str] = None
     tags: list[str] = field(default_factory=list)

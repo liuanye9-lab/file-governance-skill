@@ -2,6 +2,7 @@ from .base import BaseCollector
 from .wechat import WechatCollector
 from .inbox import InboxCollector
 from .local_folder import LocalFolderCollector
+from .url_fetch import UrlFetchCollector
 
 
 def get_collectors(config: dict, db) -> list[BaseCollector]:
@@ -16,4 +17,8 @@ def get_collectors(config: dict, db) -> list[BaseCollector]:
             collectors.append(LocalFolderCollector({"path": folder}, db))
         elif isinstance(folder, dict) and folder.get("path"):
             collectors.append(LocalFolderCollector(folder, db))
+    url_cfg = sources.get("url_fetch", {})
+    if url_cfg.get("enabled") and url_cfg.get("urls"):
+        collectors.append(UrlFetchCollector(url_cfg, db))
     return collectors
+

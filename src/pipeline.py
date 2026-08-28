@@ -68,6 +68,22 @@ class GovernancePipeline:
             else:
                 logger.warning(f"未知来源: {source}")
 
+        return self._process_records(all_records)
+
+    def fetch(self, urls: list) -> dict:
+        """按给定文件地址（URL 或本地路径）自动爬取并治理沉淀。"""
+        from .collectors.url_fetch import UrlFetchCollector
+        logger.info("=" * 60)
+        logger.info(f"File Governance Fetch 启动：{len(urls)} 个地址")
+        logger.info("=" * 60)
+        url_cfg = dict(self.config.get("sources", {}).get("url_fetch", {}))
+        url_cfg["urls"] = urls
+        url_cfg.setdefault("max_file_size_mb", self.config.get("governance", {}).get("max_file_size_mb", 500))
+        collector = UrlFetchCollector(url_cfg, self.db)
+        records = list(collector.scan())
+        return self._process_records(records)
+
+    def _process_records(self, all_records: list) -> dict:
         stats = {"total": len(all_records), "done": 0, "skipped": 0, "failed": 0}
         results = []
         self.audit.log_pipeline_start(stats["total"])

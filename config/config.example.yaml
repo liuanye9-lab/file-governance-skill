@@ -31,6 +31,15 @@ sources:
   #   name: "桌面资料"
   #   recursive: true
 
+  # 文件地址自动爬取：给定 URL 或本地路径，自动下载并治理沉淀
+  url_fetch:
+    enabled: false
+    download_dir: ""   # 留空则用系统临时目录
+    urls: []
+    # 示例：
+    # - "https://example.com/report.pdf"
+    # - "/Users/me/Documents/合同.docx"
+
 feishu:
   provider: "cli"  # 使用 lark-cli OAuth，不保存应用密钥
   cli_path: ""    # 留空自动发现

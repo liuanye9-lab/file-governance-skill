@@ -32,6 +32,8 @@ class GovernanceDB:
                 author TEXT,
                 page_count INTEGER,
                 status TEXT DEFAULT 'pending',
+                domain TEXT,
+                doc_type TEXT,
                 category TEXT,
                 sub_category TEXT,
                 tags TEXT,
@@ -86,7 +88,18 @@ class GovernanceDB:
                 updated_at TEXT NOT NULL
             );
         """)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self):
+        """对已存在的旧库补齐新增列（跨行业升级：domain/doc_type）。"""
+        cols = {row[1] for row in self.conn.execute("PRAGMA table_info(files)").fetchall()}
+        for col in ("domain", "doc_type"):
+            if col not in cols:
+                try:
+                    self.conn.execute(f"ALTER TABLE files ADD COLUMN {col} TEXT")
+                except Exception:
+                    pass
 
     def insert_file(self, record: dict):
         steps = json.dumps(record.get("processing_steps", []), ensure_ascii=False)
@@ -96,19 +109,20 @@ class GovernanceDB:
             INSERT OR REPLACE INTO files
             (id, source_path, file_name, file_ext, file_type, file_size, file_hash,
              source, source_session, captured_at, created_at, modified_at, author, page_count,
-             status, category, sub_category, tags, summary, text_content,
+             status, domain, doc_type, category, sub_category, tags, summary, text_content,
              drive_url, doc_url, version, parent_archive,
              security_level, share_permission, collaboration_status,
              human_tags, review_note, review_conclusion, error_message, processing_steps,
              record_id, agent_record_id)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             record.get("id"), record.get("source_path"), record.get("file_name"),
             record.get("file_ext"), record.get("file_type"), record.get("file_size"),
             record.get("file_hash"), record.get("source"), record.get("source_session"),
             record.get("captured_at"), record.get("created_at"), record.get("modified_at"),
             record.get("author"), record.get("page_count"),
-            record.get("status", "pending"), record.get("category"), record.get("sub_category"),
+            record.get("status", "pending"), record.get("domain"), record.get("doc_type"),
+            record.get("category"), record.get("sub_category"),
             tags, record.get("summary"), record.get("text_content", ""),
             record.get("drive_url", ""), record.get("doc_url", ""),
             record.get("version", 1), record.get("parent_archive"),

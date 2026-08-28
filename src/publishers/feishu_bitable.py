@@ -221,6 +221,8 @@ class FeishuBitablePublisher:
                     "类型": "Knowledge Record",
                     "内容": json.dumps({
                         "file_name": r.file_name,
+                        "domain": r.domain,
+                        "doc_type": r.doc_type,
                         "category": r.category,
                         "sub_category": r.sub_category,
                         "tags": r.tags,
