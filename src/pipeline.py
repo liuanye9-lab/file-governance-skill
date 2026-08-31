@@ -16,6 +16,7 @@ from .processors.classifier import Classifier
 from .governance.version import VersionManager
 from .governance.permission import PermissionGovernor
 from .governance.audit import AuditLogger
+from .governance.planner import GovernancePlanner
 from .publishers.feishu_drive import FeishuDrivePublisher
 from .publishers.feishu_bitable import FeishuBitablePublisher
 from .publishers.reporter import ResultReporter
@@ -37,6 +38,16 @@ class GovernancePipeline:
         self.parser = DocumentParser(max_text_length=self.config.get("processing", {}).get("max_text_length", 8000))
         self.classifier = Classifier(self.config.get("taxonomy", {}))
         self.version_mgr = VersionManager(self.db)
+        governance_cfg = self.config.get("governance", {})
+        self.planner = GovernancePlanner(
+            self.db,
+            quality_threshold=governance_cfg.get("quality_threshold", 75),
+        )
+        self.publication_mode = governance_cfg.get("publication_mode", "auto")
+        self.block_on = set(governance_cfg.get(
+            "block_on",
+            ["high_sensitivity", "name_conflict", "unparseable"],
+        ))
         self.drive_pub = FeishuDrivePublisher(self.config)
         self.bitable_pub = FeishuBitablePublisher(self.config, self.db)
         self.permission_gov = PermissionGovernor(
@@ -90,8 +101,159 @@ class GovernancePipeline:
             logger.warning(f"抓取：请求 {requested} 个地址，成功 {fetched} 个，失败/未找到 {requested - fetched} 个")
         return result
 
+    def plan(self, source: str = "all", urls: list = None) -> dict:
+        """只读盘点：完成解析、分类、风险与质量检查，但不上传、不写 Bitable。"""
+        if urls:
+            from .collectors.url_fetch import UrlFetchCollector
+            url_cfg = dict(self.config.get("sources", {}).get("url_fetch", {}))
+            url_cfg["urls"] = urls
+            url_cfg.setdefault(
+                "max_file_size_mb",
+                self.config.get("governance", {}).get("max_file_size_mb", 500),
+            )
+            records = list(UrlFetchCollector(url_cfg, self.db).scan())
+        else:
+            records = []
+            collectors = self.collectors if source == "all" else [
+                item for item in self.collectors if item.source_type == source
+            ]
+            for collector in collectors:
+                try:
+                    records.extend(list(collector.scan()))
+                except Exception as e:
+                    logger.error(f"采集器 {collector.source_type} 扫描失败: {e}")
+
+        planned = []
+        skipped = []
+        failed = []
+        for record in records:
+            try:
+                self.hasher.process(record)
+                self.metadata.process(record)
+                self.dedup.process(record)
+                if record.status == "skipped":
+                    skipped.append(record)
+                    self.db.insert_file(record.to_dict())
+                    continue
+                self.version_mgr.process(record)
+                self.parser.process(record)
+                self.classifier.process(record)
+                self.planner.process(record)
+                record.status = (
+                    "pending_review"
+                    if record.governance_action in ("hold", "review")
+                    else "planned"
+                )
+                self.db.insert_file(record.to_dict())
+                self.audit.log_file_step(
+                    record,
+                    "planned",
+                    detail=f"action={record.governance_action}, score={record.quality_score}",
+                )
+                planned.append(record)
+            except Exception as e:
+                record.status = "failed"
+                record.error_message = str(e)
+                self.db.insert_file(record.to_dict())
+                failed.append(record)
+
+        manifest = self.planner.build_manifest(planned + skipped + failed)
+        manifest["summary"]["skipped"] = len(skipped)
+        manifest["summary"]["failed"] = len(failed)
+        return {
+            "stats": {
+                "total": len(records),
+                "planned": len(planned),
+                "skipped": len(skipped),
+                "failed": len(failed),
+            },
+            "manifest": manifest,
+        }
+
+    def publish_review_queue(
+        self,
+        record_ids: list = None,
+        approve_risk: bool = False,
+    ) -> dict:
+        """发布已盘点记录；冲突/无法解析需 approve_risk，高敏资料始终拦截。"""
+        queue = [
+            FileRecord.from_dict(item)
+            for item in self.db.get_review_queue()
+            if not record_ids or item.get("id") in record_ids
+        ]
+        stats = {"total": len(queue), "done": 0, "blocked": 0, "failed": 0}
+        results = []
+        for record in queue:
+            if record.sensitivity_level == "high":
+                stats["blocked"] += 1
+                continue
+            if record.governance_action == "hold" and not approve_risk:
+                stats["blocked"] += 1
+                continue
+            record.status = "done"
+            if self._publish_prepared_record(record):
+                self.db.insert_file(record.to_dict())
+                self.audit.log_file_complete(record)
+                stats["done"] += 1
+                results.append({
+                    "id": record.id,
+                    "file_name": record.file_name,
+                    "drive_url": record.drive_url,
+                    "quality_score": record.quality_score,
+                    "production_ready": record.production_ready,
+                })
+            else:
+                record.status = "failed"
+                record.error_message = record.error_message or "发布失败"
+                self.db.insert_file(record.to_dict())
+                stats["failed"] += 1
+
+        if self.bitable_pub.available and stats["done"]:
+            all_done = [FileRecord.from_dict(r) for r in self.db.get_successful_records()]
+            self.bitable_pub.sync_agent_context(all_done)
+        return {"stats": stats, "results": results}
+
+    def _publish_prepared_record(self, record: FileRecord) -> bool:
+        """发布已完成解析、分类和治理检查的记录。"""
+        if self.drive_pub.available and record.file_size > 0:
+            try:
+                self.drive_pub.upload(record)
+            except Exception as e:
+                logger.warning(f"  上传失败: {e}，尝试查找已有文件...")
+                existing = self.drive_pub.find_existing_url(record.file_name)
+                if existing:
+                    record.drive_url = existing
+                    record.log_step("upload", f"复用已有链接 {existing}")
+        elif record.file_size <= 0:
+            record.log_step("upload", "空文件，仅本地归档不上传", success=False)
+
+        if self.drive_pub.available and record.file_size > 0 and not record.drive_url:
+            record.error_message = "上传飞书失败且未找到已有文件"
+            return False
+        if record.drive_url:
+            self.db.update_version_drive_url(record.file_hash, record.version, record.drive_url)
+
+        if record.drive_url:
+            try:
+                self.permission_gov.process(record)
+            except Exception as e:
+                logger.warning(f"权限治理失败: {e}")
+
+        if self.bitable_pub.available:
+            record_id = self.bitable_pub.publish_record(record)
+            if not record_id:
+                record.error_message = "知识材料表写入失败"
+                return False
+        return True
+
     def _process_records(self, all_records: list) -> dict:
-        stats = {"total": len(all_records), "done": 0, "skipped": 0, "failed": 0}
+        stats = {
+            "total": len(all_records),
+            "done": 0,
+            "pending_review": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
         results = []
         self.audit.log_pipeline_start(stats["total"])
 
@@ -109,40 +271,29 @@ class GovernancePipeline:
                 self.version_mgr.process(record)
                 self.parser.process(record)
                 self.classifier.process(record)
-                upload_ok = False
-                if self.drive_pub.available and record.file_size > 0:
-                    try:
-                        self.drive_pub.upload(record)
-                        upload_ok = True
-                    except Exception as e:
-                        logger.warning(f"  上传失败: {e}，尝试查找已有文件...")
-                        existing = self.drive_pub.find_existing_url(record.file_name)
-                        if existing:
-                            record.drive_url = existing
-                            record.log_step("upload", f"复用已有链接 {existing}")
-                            upload_ok = True
-                elif record.file_size <= 0:
-                    record.log_step("upload", "空文件，仅本地归档不上传", success=False)
-                if upload_ok and record.drive_url:
-                    try:
-                        self.permission_gov.process(record)
-                    except Exception as e:
-                        logger.debug(f"权限治理跳过: {e}")
-                if self.bitable_pub.available:
-                    try:
-                        self.bitable_pub.publish_record(record)
-                    except Exception as e:
-                        logger.warning(f"Bitable 写入失败: {e}")
-                # 需上传却未成功（非空文件且 drive 可用但上传失败）标记为 failed，便于重试
-                if self.drive_pub.available and record.file_size > 0 and not record.drive_url:
+                self.planner.process(record)
+
+                if self._should_hold(record):
+                    record.status = "pending_review"
+                    self.db.insert_file(record.to_dict())
+                    stats["pending_review"] += 1
+                    self.audit.log_file_step(
+                        record,
+                        "pending_review",
+                        success=False,
+                        detail=f"priority={record.review_priority}, action={record.governance_action}",
+                    )
+                    logger.warning(f"  发布前拦截: {record.review_priority} / {record.review_conclusion}")
+                    continue
+
+                record.status = "done"
+                if not self._publish_prepared_record(record):
                     record.status = "failed"
-                    record.error_message = "上传飞书失败且未找到已有文件"
                     self.db.insert_file(record.to_dict())
                     self.audit.log_file_complete(record)
                     stats["failed"] += 1
                     logger.warning("  标记为失败（待重试）")
                     continue
-                record.status = "done"
                 self.db.insert_file(record.to_dict())
                 self.audit.log_file_complete(record)
                 results.append({
@@ -151,6 +302,8 @@ class GovernancePipeline:
                     "sub_category": record.sub_category,
                     "summary": record.summary,
                     "drive_url": record.drive_url,
+                    "quality_score": record.quality_score,
+                    "production_ready": record.production_ready,
                 })
                 stats["done"] += 1
                 logger.info(f"  完成 ✓")
@@ -176,6 +329,16 @@ class GovernancePipeline:
         card = self.reporter.build_card(results, stats, dashboard_url)
         logger.info(f"处理完成: {stats}")
         return {"stats": stats, "results": results, "card": card}
+
+    def _should_hold(self, record: FileRecord) -> bool:
+        if self.publication_mode == "gated":
+            return True
+        checks = {
+            "high_sensitivity": record.sensitivity_level == "high",
+            "name_conflict": bool(record.conflict_status),
+            "unparseable": self.planner.quality.is_unparseable(record),
+        }
+        return any(checks.get(reason, False) for reason in self.block_on)
 
     def refresh_all(self) -> dict:
         logger.warning("执行全量刷新：将清空 Bitable 两表记录和本地同步状态")
@@ -203,6 +366,12 @@ class GovernancePipeline:
         result = self.permission_gov.govern_existing(tokens)
         logger.info(f"权限治理完成: 成功 {result['success']}, 失败 {result['failed']}")
         return result
+
+    def due_reviews(self, as_of: str = "") -> dict:
+        from datetime import date
+        target = as_of or date.today().isoformat()
+        items = self.db.get_due_reviews(target)
+        return {"as_of": target, "count": len(items), "items": items}
 
     def close(self):
         self.db.close()

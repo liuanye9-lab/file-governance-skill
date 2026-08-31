@@ -44,6 +44,27 @@ def cmd_fetch(args):
         pipeline.close()
 
 
+def cmd_plan(args):
+    pipeline = GovernancePipeline()
+    try:
+        result = pipeline.plan(source=args.source, urls=args.urls)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    finally:
+        pipeline.close()
+
+
+def cmd_publish(args):
+    pipeline = GovernancePipeline()
+    try:
+        result = pipeline.publish_review_queue(
+            record_ids=args.record_ids,
+            approve_risk=args.approve_risk,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    finally:
+        pipeline.close()
+
+
 def cmd_permissions(args):
     pipeline = GovernancePipeline()
     try:
@@ -62,6 +83,14 @@ def cmd_stats(args):
         print(json.dumps(db.get_stats(), ensure_ascii=False, indent=2))
     finally:
         db.close()
+
+
+def cmd_review_due(args):
+    pipeline = GovernancePipeline()
+    try:
+        print(json.dumps(pipeline.due_reviews(args.as_of), ensure_ascii=False, indent=2))
+    finally:
+        pipeline.close()
 
 
 def cmd_init(args):
@@ -93,6 +122,25 @@ def main():
     p_fetch.add_argument("--stats", action="store_true", help="输出统计数据")
     p_fetch.set_defaults(func=cmd_fetch)
 
+    p_plan = sub.add_parser("plan", help="只读盘点并生成发布计划，不写入飞书")
+    p_plan.add_argument(
+        "--source",
+        default="all",
+        choices=["all", "wechat", "inbox", "local_folder", "url_fetch"],
+    )
+    p_plan.add_argument("--url", dest="urls", action="append", help="可重复传入文件 URL 或本地路径")
+    p_plan.set_defaults(func=cmd_plan)
+
+    p_publish = sub.add_parser("publish", help="发布已经盘点的记录")
+    p_publish.add_argument("--yes", action="store_true", required=True, help="确认执行写入")
+    p_publish.add_argument("--record-id", dest="record_ids", action="append", help="仅发布指定记录，可重复")
+    p_publish.add_argument(
+        "--approve-risk",
+        action="store_true",
+        help="显式批准冲突/无法解析项；高敏资料仍保持拦截",
+    )
+    p_publish.set_defaults(func=cmd_publish)
+
     p_refresh = sub.add_parser("refresh", help="全量刷新：清空 Bitable 和本地状态后重跑")
     p_refresh.set_defaults(func=cmd_refresh)
 
@@ -101,6 +149,10 @@ def main():
 
     p_stats = sub.add_parser("stats", help="显示治理统计")
     p_stats.set_defaults(func=cmd_stats)
+
+    p_due = sub.add_parser("review-due", help="列出已到期的知识复核清单")
+    p_due.add_argument("--as-of", default="", help="截止日期 YYYY-MM-DD，默认今天")
+    p_due.set_defaults(func=cmd_review_due)
 
     p_init = sub.add_parser("init", help="初始化配置文件")
     p_init.add_argument("--force", action="store_true")

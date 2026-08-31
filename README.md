@@ -18,11 +18,13 @@
 
 | | |
 |---|---|
-| 🔌 **多来源采集** | 微信本地目录、拖拽收件箱、任意本地文件夹，可插拔 Source Adapter 接口 |
+| 🔌 **多来源采集** | 微信本地目录、拖拽收件箱、任意本地文件夹、URL/本地路径抓取，可插拔 Source Adapter 接口 |
 | 📄 **多格式解析** | docx / doc (textutil) / xlsx / xls (xlrd) / pptx / pdf / txt / md / csv / json / zip / 图片元数据 |
-| 🏷️ **智能分类** | 规则 + 可扩展 LLM 双引擎，自动打标签、生成第一性原理摘要 |
+| 🏷️ **跨行业分类** | 行业领域 × 文档类型双轴分类，项目 taxonomy 优先、通用维度兜底，生成第一性原理摘要 |
 | 🔍 **三级去重** | SHA-256 精确哈希 + 路径去重 + 文件名匹配 |
 | 📚 **版本控制** | 同名同内容文件自动版本链追踪，历史可追溯 |
+| 🛡️ **发布前治理** | 只读盘点、同名冲突、敏感信息脱敏初筛、无法解析清单、确认后发布 |
+| ✅ **三维质量审核** | 内容可靠、易找易懂、易维护三维评分，输出 production_ready 与 P0/P1/P2 建议 |
 | 🔐 **权限自动治理** | 上传即设置 L2-Internal 密级 + tenant_readable（组织内可见） |
 | 📊 **双通道沉淀** | 飞书多维表格「知识材料」表（人类协作）+「Agent上下文窗口」表（机器消费） |
 | 📈 **Dashboard 观察台** | 指标卡、分类环图、文件类型构成、协作进度（黑白灰 iOS/SpaceX 风格） |
@@ -32,7 +34,7 @@
 
 ### 前置依赖
 
-- Python 3.10+
+- Python 3.9+
 - [lark-cli](https://github.com/larksuite/cli)（`npm i -g @larksuite/cli`）并已通过 `lark-cli auth login` 登录
 - 飞书企业账号（需创建一个多维表格 Base）
 
@@ -75,6 +77,12 @@ pip3 install -r requirements.txt
 ```bash
 python3 src/cli.py run                    # 增量扫描治理（默认）
 python3 src/cli.py run --source inbox     # 仅处理收件箱
+python3 src/cli.py fetch "https://..."    # 按 URL/路径抓取并治理
+python3 src/cli.py plan --source inbox    # 只读盘点，生成台账与发布计划
+python3 src/cli.py plan --url "https://..." # 盘点指定 URL，可重复 --url
+python3 src/cli.py publish --yes           # 发布已确认的计划
+python3 src/cli.py publish --yes --approve-risk # 放行冲突/无法解析项；高敏仍拦截
+python3 src/cli.py review-due              # 查看已到期的知识复核清单
 python3 src/cli.py refresh                # 全量刷新（清空重跑）
 python3 src/cli.py govern-permissions     # 批量治理文件权限
 python3 src/cli.py stats                  # 查看治理统计
@@ -91,16 +99,29 @@ python3 scripts/start_inbox.py            # 启动拖拽收件箱 Web UI (127.0.
     哈希计算 → 元数据提取 → 去重检查 → 格式解析 → 智能分类
         ↓
 [治理层 (Governance)]
-    版本控制 → 权限自动治理（密级+共享）→ 审计日志
+    版本控制 → 敏感初筛 → 冲突检测 → 三维质量评分 → production_ready 判定
+        ↓
+[发布门禁]
+    自动模式：低风险自动发布，高敏/冲突/无法解析拦截
+    审核模式：plan 只读盘点 → 人工确认 → publish 发布
         ↓
 [发布层 (Publishers)]
-    飞书云空间上传 → 知识材料表写入 → Agent上下文窗口同步 → Dashboard刷新
+    权限治理 → 飞书云空间上传 → 知识材料表写入 → Agent上下文窗口同步
         ↓
 [输出]
     ├── 知识材料表（人类：分类/标签/摘要/协作状态/直达链接/审核结论）
     ├── Agent上下文窗口（机器：Project/Coverage/Taxonomy/Knowledge/Governance Rule 五类结构化 JSON）
     └── Dashboard 观察台（指标卡/环图/条形图/进度条）
 ```
+
+## 治理运行模式
+
+系统吸收了企业知识库治理中“盘点、确认、发布、审核、运维”的控制思路，并与本项目的跨行业分类和 Bitable 双通道结合：
+
+- **自动模式（默认）**：低风险资料自动沉淀；高敏、同名冲突、无法解析项进入待审核队列。
+- **门禁模式**：配置 `publication_mode: gated` 后，所有资料先执行 `plan`，确认后再执行 `publish --yes`。
+- **质量审核**：每份资料按内容可靠、易找易懂、易维护三维评分，生成 `production_ready` 和 P0/P1/P2 优先级。
+- **持续运维**：按文档类型自动安排 30/90/180 天复核周期，使用 `review-due` 获取到期清单。
 
 ## 目录结构
 
@@ -135,6 +156,8 @@ file-governance/
 5. **增量优先**：默认增量处理，全量刷新作为显式命令
 6. **权限自动治理**：文件上传即自动设置合理密级和内部可见权限
 7. **可扩展架构**：Source Adapter / Processor / Publisher 均可插拔扩展
+8. **先盘点再发布**：批量或高风险任务先生成台账、冲突/敏感/无法解析清单，不把“处理完成”混同于“可生产使用”
+9. **AI 审核不替代业务审核**：评分用于排序和发现问题，P0 风险项必须由人确认
 
 ## 飞书多维表格 Schema
 
@@ -143,8 +166,8 @@ file-governance/
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | 文件名 | 文本 | 原始文件名 |
-| 分类 | 单选 | 运营SOP/制度与安全/培训与服务标准/客户体验/经营文化/待复核 |
-| 子分类 | 单选 | 二级分类 |
+| 分类 | 单选 | 项目 taxonomy 分类；无项目规则时回退为行业领域 |
+| 子分类 | 单选 | 项目子分类；无项目规则时回退为文档类型 |
 | 标签 | 多选 | 自动生成关键词 |
 | 摘要 | 文本 | 第一性原理概括 |
 | 文件类型 | 单选 | docx/pptx/xlsx/pdf/zip/image... |
@@ -153,7 +176,7 @@ file-governance/
 | 直达链接 | URL | `/file/<token>` 可点击链接 |
 | 协作状态 | 单选 | 待审核/已确认/需补充/已归档 |
 | 人工标签 | 多选 | 人工补充 |
-| 协作备注/审核结论 | 文本 | 人工审核 |
+| 协作备注/审核结论 | 文本 | 行业/类型、敏感等级、质量评分、production_ready 与人工审核 |
 | 版本号 | 数字 | 文件版本 |
 | 父文件 | 文本 | 压缩包子文件关联 |
 | 密级 | 单选 | L1/L2/L3/L4 |

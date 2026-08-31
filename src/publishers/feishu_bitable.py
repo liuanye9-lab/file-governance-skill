@@ -148,6 +148,13 @@ class FeishuBitablePublisher:
 
     def _build_knowledge_fields(self, record: FileRecord) -> dict:
         from datetime import datetime
+        governance_note = (
+            f"行业={record.domain or '未识别'}；类型={record.doc_type or '未识别'}；"
+            f"质量={record.quality_score}；敏感级别={record.sensitivity_level}；"
+            f"复核优先级={record.review_priority or '无'}；"
+            f"下次复核={record.next_review_at or '未安排'}"
+        )
+        note = "；".join(part for part in (record.review_note, governance_note) if part)
         return {
             "文件名": record.file_name,
             "分类": record.category or "待人工复核",
@@ -161,8 +168,10 @@ class FeishuBitablePublisher:
             "直达链接": {"link": record.drive_url, "text": record.file_name} if record.drive_url else "",
             "协作状态": record.collaboration_status,
             "人工标签": ", ".join(record.human_tags),
-            "协作备注": record.review_note,
-            "审核结论": record.review_conclusion,
+            "协作备注": note,
+            "审核结论": record.review_conclusion or (
+                "生产就绪" if record.production_ready else "待人工审核"
+            ),
             "版本号": record.version,
             "父文件": record.parent_archive or "",
             "密级": record.security_level,
@@ -174,8 +183,12 @@ class FeishuBitablePublisher:
         from datetime import datetime
         done = [r for r in records if r.status == "done" and r.drive_url]
         categories = {}
+        domains = {}
+        doc_types = {}
         for r in done:
             categories.setdefault(r.category or "其他", []).append(r)
+            domains[r.domain or "通用"] = domains.get(r.domain or "通用", 0) + 1
+            doc_types[r.doc_type or "其他文档"] = doc_types.get(r.doc_type or "其他文档", 0) + 1
         project_name = self.config.get("knowledge", {}).get("project_name", "默认项目")
         output = []
         output.append({
@@ -199,7 +212,10 @@ class FeishuBitablePublisher:
                 "内容": json.dumps({
                     "total": len(done),
                     "by_category": {c: len(rs) for c, rs in categories.items()},
-                    "by_type": {},
+                    "by_domain": domains,
+                    "by_doc_type": doc_types,
+                    "production_ready": sum(1 for r in done if r.production_ready),
+                    "needs_review": sum(1 for r in done if not r.production_ready),
                 }, ensure_ascii=False),
                 "摘要": f"已覆盖 {len(categories)} 个分类，共 {len(done)} 份材料",
             }
@@ -231,6 +247,14 @@ class FeishuBitablePublisher:
                         "source": r.source,
                         "version": r.version,
                         "file_type": r.file_type,
+                        "sensitivity_level": r.sensitivity_level,
+                        "quality_score": r.quality_score,
+                        "quality_dimensions": r.quality_dimensions,
+                        "production_ready": r.production_ready,
+                        "review_priority": r.review_priority,
+                        "review_cycle_days": r.review_cycle_days,
+                        "next_review_at": r.next_review_at,
+                        "conflict_status": r.conflict_status,
                     }, ensure_ascii=False),
                     "摘要": r.summary or r.file_name,
                 }
@@ -245,8 +269,15 @@ class FeishuBitablePublisher:
                     "default_share_permission": "tenant_readable",
                     "dedup_strategy": "hash+path",
                     "versioning_enabled": True,
+                    "quality_dimensions": ["reliability", "findability", "maintainability"],
+                    "quality_threshold": self.config.get("governance", {}).get(
+                        "quality_threshold", 75
+                    ),
+                    "publication_mode": self.config.get("governance", {}).get(
+                        "publication_mode", "auto"
+                    ),
                 }, ensure_ascii=False),
-                "摘要": "默认治理规则：内部可见、自动去重、版本追踪",
+                "摘要": "治理规则：权限分级、自动去重、版本追踪、发布前风险检查与三维质量评分",
             }
         })
         return output

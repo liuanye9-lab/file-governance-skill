@@ -42,6 +42,17 @@ class FileRecord:
     human_tags: list[str] = field(default_factory=list)
     review_note: str = ""
     review_conclusion: str = ""
+    sensitivity_level: str = "none"
+    sensitivity_findings: list[dict] = field(default_factory=list)
+    conflict_status: str = ""
+    conflict_details: list[dict] = field(default_factory=list)
+    quality_score: int = 0
+    quality_dimensions: dict = field(default_factory=dict)
+    production_ready: bool = False
+    governance_action: str = "publish"
+    review_priority: str = ""
+    review_cycle_days: int = 0
+    next_review_at: Optional[str] = None
     error_message: str = ""
     processing_steps: list[dict] = field(default_factory=list)
     record_id: str = ""

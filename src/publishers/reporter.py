@@ -7,13 +7,18 @@ class ResultReporter:
         done = stats.get("done", 0)
         skipped = stats.get("skipped", 0)
         failed = stats.get("failed", 0)
+        pending_review = stats.get("pending_review", 0)
         total = stats.get("total", 0)
         elements = [
             {
                 "tag": "div",
                 "text": {
                     "tag": "lark_md",
-                    "content": f"**📊 文件治理报告**\n\n总计 **{total}** 个文件，新增 **{done}**，跳过 **{skipped}**，失败 **{failed}**"
+                    "content": (
+                        f"**📊 文件治理报告**\n\n总计 **{total}** 个文件，"
+                        f"新增 **{done}**，待审核 **{pending_review}**，"
+                        f"跳过 **{skipped}**，失败 **{failed}**"
+                    )
                 }
             },
             {"tag": "hr"},
@@ -51,7 +56,7 @@ class ResultReporter:
             "config": {"wide_screen_mode": True},
             "header": {
                 "title": {"tag": "plain_text", "content": "文件治理完成"},
-                "template": "grey" if failed == 0 else "orange",
+                "template": "grey" if failed == 0 and pending_review == 0 else "orange",
             },
             "elements": elements,
         }

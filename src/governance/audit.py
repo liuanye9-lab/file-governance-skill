@@ -34,6 +34,10 @@ class AuditLogger:
     def log_pipeline_complete(self, stats: dict):
         self.db.log_audit(
             action="pipeline_complete",
-            detail=f"完成: 新增{stats.get('done',0)}, 跳过{stats.get('skipped',0)}, 失败{stats.get('failed',0)}",
+            detail=(
+                f"完成: 新增{stats.get('done',0)}, "
+                f"待审核{stats.get('pending_review',0)}, "
+                f"跳过{stats.get('skipped',0)}, 失败{stats.get('failed',0)}"
+            ),
             success=True,
         )

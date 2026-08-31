@@ -23,6 +23,8 @@ class BaseCollector(ABC):
             return True
         if path.name.startswith("."):
             return True
+        if path.name in {"governance.db", "governance.db-journal", "governance.log"}:
+            return True
         try:
             if path.stat().st_size > self.max_file_size_mb * 1024 * 1024:
                 return True

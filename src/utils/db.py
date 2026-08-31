@@ -49,6 +49,17 @@ class GovernanceDB:
                 human_tags TEXT,
                 review_note TEXT,
                 review_conclusion TEXT,
+                sensitivity_level TEXT DEFAULT 'none',
+                sensitivity_findings TEXT,
+                conflict_status TEXT,
+                conflict_details TEXT,
+                quality_score INTEGER DEFAULT 0,
+                quality_dimensions TEXT,
+                production_ready INTEGER DEFAULT 0,
+                governance_action TEXT DEFAULT 'publish',
+                review_priority TEXT,
+                review_cycle_days INTEGER DEFAULT 0,
+                next_review_at TEXT,
                 error_message TEXT,
                 processing_steps TEXT,
                 record_id TEXT,
@@ -92,12 +103,27 @@ class GovernanceDB:
         self.conn.commit()
 
     def _migrate(self):
-        """对已存在的旧库补齐新增列（跨行业升级：domain/doc_type）。"""
+        """对已存在的旧库补齐后续版本新增列。"""
         cols = {row[1] for row in self.conn.execute("PRAGMA table_info(files)").fetchall()}
-        for col in ("domain", "doc_type"):
+        migrations = {
+            "domain": "TEXT",
+            "doc_type": "TEXT",
+            "sensitivity_level": "TEXT DEFAULT 'none'",
+            "sensitivity_findings": "TEXT",
+            "conflict_status": "TEXT",
+            "conflict_details": "TEXT",
+            "quality_score": "INTEGER DEFAULT 0",
+            "quality_dimensions": "TEXT",
+            "production_ready": "INTEGER DEFAULT 0",
+            "governance_action": "TEXT DEFAULT 'publish'",
+            "review_priority": "TEXT",
+            "review_cycle_days": "INTEGER DEFAULT 0",
+            "next_review_at": "TEXT",
+        }
+        for col, column_type in migrations.items():
             if col not in cols:
                 try:
-                    self.conn.execute(f"ALTER TABLE files ADD COLUMN {col} TEXT")
+                    self.conn.execute(f"ALTER TABLE files ADD COLUMN {col} {column_type}")
                 except Exception:
                     pass
 
@@ -105,6 +131,9 @@ class GovernanceDB:
         steps = json.dumps(record.get("processing_steps", []), ensure_ascii=False)
         tags = ", ".join(record.get("tags", [])) if isinstance(record.get("tags"), list) else record.get("tags", "")
         human_tags = ", ".join(record.get("human_tags", [])) if isinstance(record.get("human_tags"), list) else record.get("human_tags", "")
+        sensitivity_findings = json.dumps(record.get("sensitivity_findings", []), ensure_ascii=False)
+        conflict_details = json.dumps(record.get("conflict_details", []), ensure_ascii=False)
+        quality_dimensions = json.dumps(record.get("quality_dimensions", {}), ensure_ascii=False)
         self.conn.execute("""
             INSERT OR REPLACE INTO files
             (id, source_path, file_name, file_ext, file_type, file_size, file_hash,
@@ -112,9 +141,13 @@ class GovernanceDB:
              status, domain, doc_type, category, sub_category, tags, summary, text_content,
              drive_url, doc_url, version, parent_archive,
              security_level, share_permission, collaboration_status,
-             human_tags, review_note, review_conclusion, error_message, processing_steps,
+             human_tags, review_note, review_conclusion,
+             sensitivity_level, sensitivity_findings, conflict_status, conflict_details,
+             quality_score, quality_dimensions, production_ready, governance_action, review_priority,
+             review_cycle_days, next_review_at,
+             error_message, processing_steps,
              record_id, agent_record_id)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             record.get("id"), record.get("source_path"), record.get("file_name"),
             record.get("file_ext"), record.get("file_type"), record.get("file_size"),
@@ -130,6 +163,12 @@ class GovernanceDB:
             record.get("share_permission", "tenant_readable"),
             record.get("collaboration_status", "待审核"),
             human_tags, record.get("review_note", ""), record.get("review_conclusion", ""),
+            record.get("sensitivity_level", "none"), sensitivity_findings,
+            record.get("conflict_status", ""), conflict_details,
+            record.get("quality_score", 0), quality_dimensions,
+            1 if record.get("production_ready", False) else 0,
+            record.get("governance_action", "publish"), record.get("review_priority", ""),
+            record.get("review_cycle_days", 0), record.get("next_review_at"),
             record.get("error_message", ""), steps,
             record.get("record_id", ""), record.get("agent_record_id", ""),
         ))
@@ -137,7 +176,8 @@ class GovernanceDB:
 
     def is_path_processed(self, source_path: str) -> bool:
         row = self.conn.execute(
-            "SELECT 1 FROM files WHERE source_path = ? AND status IN ('done','skipped')",
+            "SELECT 1 FROM files WHERE source_path = ? "
+            "AND status IN ('done','skipped','planned','pending_review')",
             (source_path,)
         ).fetchone()
         return row is not None
@@ -195,11 +235,57 @@ class GovernanceDB:
                 d["processing_steps"] = json.loads(d.get("processing_steps") or "[]")
             except Exception:
                 d["processing_steps"] = []
+            for field, default in (
+                ("sensitivity_findings", []),
+                ("conflict_details", []),
+                ("quality_dimensions", {}),
+            ):
+                try:
+                    d[field] = json.loads(d.get(field) or json.dumps(default))
+                except Exception:
+                    d[field] = default
+            d["production_ready"] = bool(d.get("production_ready"))
             result.append(d)
         return result
 
     def get_successful_records(self) -> list[dict]:
         return self.get_all_files(status="done")
+
+    def get_review_queue(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM files WHERE status IN ('planned', 'pending_review') "
+            "ORDER BY captured_at ASC"
+        ).fetchall()
+        result = []
+        for row in rows:
+            record = dict(row)
+            for field, default in (
+                ("sensitivity_findings", []),
+                ("conflict_details", []),
+                ("quality_dimensions", {}),
+                ("processing_steps", []),
+            ):
+                try:
+                    record[field] = json.loads(record.get(field) or json.dumps(default))
+                except Exception:
+                    record[field] = default
+            record["tags"] = [t.strip() for t in (record.get("tags") or "").split(",") if t.strip()]
+            record["human_tags"] = [
+                t.strip() for t in (record.get("human_tags") or "").split(",") if t.strip()
+            ]
+            record["production_ready"] = bool(record.get("production_ready"))
+            result.append(record)
+        return result
+
+    def get_due_reviews(self, as_of: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT id, file_name, domain, doc_type, category, version, "
+            "quality_score, production_ready, review_priority, next_review_at, drive_url "
+            "FROM files WHERE status = 'done' AND COALESCE(next_review_at, '') != '' "
+            "AND next_review_at <= ? ORDER BY next_review_at ASC, review_priority ASC",
+            (as_of,),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def add_version(self, file_hash: str, file_name: str, version: int, source_path: str, drive_url: str = "", notes: str = ""):
         self.conn.execute(
@@ -213,6 +299,13 @@ class GovernanceDB:
             "SELECT * FROM versions WHERE file_hash = ? ORDER BY version DESC", (file_hash,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def update_version_drive_url(self, file_hash: str, version: int, drive_url: str):
+        self.conn.execute(
+            "UPDATE versions SET drive_url = ? WHERE file_hash = ? AND version = ?",
+            (drive_url, file_hash, version),
+        )
+        self.conn.commit()
 
     def log_audit(self, action: str, file_id: str = "", file_name: str = "", detail: str = "", success: bool = True):
         self.conn.execute(
@@ -247,17 +340,36 @@ class GovernanceDB:
     def get_stats(self) -> dict:
         total = self.conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
         done = self.conn.execute("SELECT COUNT(*) FROM files WHERE status = 'done'").fetchone()[0]
+        pending_review = self.conn.execute(
+            "SELECT COUNT(*) FROM files WHERE status IN ('planned','pending_review')"
+        ).fetchone()[0]
         skipped = self.conn.execute("SELECT COUNT(*) FROM files WHERE status = 'skipped'").fetchone()[0]
         failed = self.conn.execute("SELECT COUNT(*) FROM files WHERE status = 'failed'").fetchone()[0]
+        production_ready = self.conn.execute(
+            "SELECT COUNT(*) FROM files WHERE status = 'done' AND production_ready = 1"
+        ).fetchone()[0]
         cats = {}
         for r in self.conn.execute("SELECT category, COUNT(*) as c FROM files WHERE status = 'done' AND category IS NOT NULL GROUP BY category").fetchall():
             cats[r["category"]] = r["c"]
         types = {}
         for r in self.conn.execute("SELECT file_type, COUNT(*) as c FROM files WHERE status = 'done' AND file_type IS NOT NULL GROUP BY file_type").fetchall():
             types[r["file_type"]] = r["c"]
+        domains = {}
+        for r in self.conn.execute(
+            "SELECT domain, COUNT(*) as c FROM files WHERE status = 'done' "
+            "AND domain IS NOT NULL GROUP BY domain"
+        ).fetchall():
+            domains[r["domain"]] = r["c"]
         return {
-            "total": total, "done": done, "skipped": skipped, "failed": failed,
-            "by_category": cats, "by_type": types
+            "total": total,
+            "done": done,
+            "pending_review": pending_review,
+            "skipped": skipped,
+            "failed": failed,
+            "production_ready": production_ready,
+            "by_category": cats,
+            "by_domain": domains,
+            "by_type": types,
         }
 
     def close(self):

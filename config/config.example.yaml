@@ -35,6 +35,7 @@ sources:
   url_fetch:
     enabled: false
     download_dir: ""   # 留空则用系统临时目录
+    timeout: 60
     urls: []
     # 示例：
     # - "https://example.com/report.pdf"
@@ -85,6 +86,11 @@ governance:
   enable_versioning: true
   dedup_strategy: "hash+path"   # hash / path / hash+path
   max_file_size_mb: 500
+  # auto: 低风险资料自动发布，高敏/冲突/无法解析项进入待审核
+  # gated: 所有资料先进入盘点计划，需执行 publish --yes 后发布
+  publication_mode: "auto"
+  quality_threshold: 75
+  block_on: ["high_sensitivity", "name_conflict", "unparseable"]
 
 processing:
   max_text_length: 8000

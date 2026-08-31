@@ -33,6 +33,9 @@ description: "企业级文件与数据治理 Skill：从微信/本地/多来源�
 | **去重引擎** | SHA-256 精确哈希 + 路径去重 + 文件名相似度三级策略 | ✅ |
 | **版本控制** | 同名/同内容文件版本链追踪，版本历史可追溯 | ✅ |
 | **元数据提取** | 文件大小、类型、创建/修改时间、作者、页数、来源会话 | ✅ |
+| **发布前盘点** | 只读生成资料台账、目录映射建议、冲突清单、敏感清单、无法解析清单和发布计划 | ✅ |
+| **敏感与冲突治理** | 脱敏证据初筛；高敏、同名不同内容、无法解析项自动进入 P0 待审核，不自动发布 | ✅ |
+| **AI 质量审核** | 按“内容可靠、易找易懂、易维护”评分，生成 production_ready 与 P0/P1/P2 建议 | ✅ |
 | **权限治理** | 自动设置密级（L2-Internal）+ tenant_readable（组织内可见） | ✅ |
 | **双通道沉淀** | 飞书多维表格「知识材料」表（人类协作）+「Agent上下文窗口」表（机器消费，含 domain/doc_type 结构化字段） | ✅ |
 | **Dashboard 观察台** | 指标卡、分类环图、文件类型构成、覆盖状态、协作进度 | ✅ |
@@ -74,6 +77,17 @@ python3 src/cli.py run --source inbox
 # 文件地址自动爬取（支持 URL 或本地路径，可多个）
 python3 src/cli.py fetch "https://example.com/report.pdf" "/path/to/合同.docx"
 
+# 官方治理模式：先只读盘点，不写入飞书
+python3 src/cli.py plan --source inbox
+python3 src/cli.py plan --url "https://example.com/report.pdf"
+
+# 确认发布盘点结果；冲突/无法解析项可显式批准，高敏资料仍保持拦截
+python3 src/cli.py publish --yes
+python3 src/cli.py publish --yes --approve-risk
+
+# 持续运维：列出到期复核知识
+python3 src/cli.py review-due
+
 # 全量刷新（清空重跑）
 python3 src/cli.py refresh
 
@@ -94,9 +108,13 @@ python3 src/cli.py govern-permissions
      ↓
 [格式解析] → 多格式统一文本提取（含 ZIP 展开、大文件分片）
      ↓
-[智能分类] → LLM + 规则双引擎 → 分类/子分类/标签/第一性原理摘要
+[智能分类] → 内容规则 + 可扩展 LLM → 行业/文档类型/项目分类/标签/第一性原理摘要
      ↓
 [版本检测] → 同名同哈希 → 版本链关联；内容变更 → 新版本
+     ↓
+[治理审查] → 敏感初筛/冲突检测/无法解析 → 三维质量评分 → production_ready
+     ↓
+[发布门禁] → 自动模式低风险直发；高风险待审核 / gated 模式全部先盘点
      ↓
 [权限治理] → 密级 L2-Internal → tenant_readable 组织内可见
      ↓
@@ -118,8 +136,8 @@ python3 src/cli.py govern-permissions
 | 字段名 | 类型 | 说明 |
 |--------|------|------|
 | 文件名 | 文本 | 原始文件名 |
-| 分类 | 单选 | 运营SOP/制度与安全/培训与服务标准/客户体验/经营文化/待复核 |
-| 子分类 | 单选 | 二级分类 |
+| 分类 | 单选 | 项目 taxonomy；无项目规则时回退为行业领域 |
+| 子分类 | 单选 | 项目子分类；无项目规则时回退为文档类型 |
 | 标签 | 多选 | 自动生成的关键词标签 |
 | 摘要 | 文本 | 第一性原理概括，适配注意力机制 |
 | 文件类型 | 单选 | docx/pptx/xlsx/pdf/zip/图片等 |
@@ -129,8 +147,8 @@ python3 src/cli.py govern-permissions
 | 直达链接 | URL | 飞书云空间 `/file/<token>` 可点击链接 |
 | 协作状态 | 单选 | 待审核/已确认/需补充/已归档 |
 | 人工标签 | 多选 | 人工补充标签 |
-| 协作备注 | 文本 | 人工备注 |
-| 审核结论 | 文本 | 人工审核结论 |
+| 协作备注 | 文本 | 行业/类型、敏感等级、质量评分、复核优先级与人工备注 |
+| 审核结论 | 文本 | production_ready 或待人工审核 |
 | 版本号 | 数字 | 文件版本 |
 | 父文件 | 文本 | 压缩包子文件关联父包 |
 | 密级 | 单选 | L1/L2/L3/L4（默认 L2-Internal） |
@@ -175,7 +193,8 @@ file-governance/
 │   │   ├── base.py             # 采集器基类（接口定义）
 │   │   ├── wechat.py           # 微信本地目录
 │   │   ├── inbox.py            # 本地收件箱
-│   │   └── local_folder.py     # 指定本地目录
+│   │   ├── local_folder.py     # 指定本地目录
+│   │   └── url_fetch.py        # URL/本地路径抓取
 │   ├── processors/             # 处理模块
 │   │   ├── hasher.py           # 哈希计算
 │   │   ├── metadata.py         # 元数据提取
@@ -185,6 +204,9 @@ file-governance/
 │   ├── governance/             # 治理模块
 │   │   ├── version.py          # 版本控制
 │   │   ├── permission.py       # 权限治理（密级+共享）
+│   │   ├── sensitivity.py      # 敏感信息脱敏初筛
+│   │   ├── quality.py          # 三维质量评分
+│   │   ├── planner.py          # 发布计划与问题清单
 │   │   └── audit.py            # 审计日志
 │   ├── publishers/             # 发布模块
 │   │   ├── feishu_drive.py     # 飞书云空间上传
@@ -208,7 +230,8 @@ file-governance/
 │   └── inbox.html              # 收件箱页面
 ├── data/                       # 运行时数据
 │   └── governance.db           # SQLite 数据库
-└── inbox/                      # 收件箱拖拽目录
+├── inbox/                      # 收件箱拖拽目录
+└── tests/                      # 治理门禁自动化测试
 ```
 
 ---
@@ -231,6 +254,10 @@ sources:
       host: "127.0.0.1"
       port: 8765
   local_folders: []  # 额外监控的本地目录列表
+  url_fetch:
+    enabled: false
+    timeout: 60
+    urls: []
 
 feishu:
   provider: "cli"  # 使用 lark-cli OAuth，不存密钥
@@ -248,6 +275,9 @@ governance:
   enable_versioning: true
   dedup_strategy: "hash+path"  # hash / path / hash+path
   max_file_size_mb: 500
+  publication_mode: "auto"  # auto / gated
+  quality_threshold: 75
+  block_on: ["high_sensitivity", "name_conflict", "unparseable"]
 
 taxonomy:
   categories: [...]  # 分类体系，可按项目自定义
@@ -297,3 +327,6 @@ taxonomy:
 5. **增量优先**：默认增量处理，全量刷新作为显式命令
 6. **权限自动治理**：文件上传即自动设置合理密级和内部可见权限，避免人工疏漏
 7. **可扩展架构**：Source Adapter / Processor / Publisher 均可插拔扩展
+8. **先盘点再发布**：批量或高风险范围先输出资料台账与问题清单，确认后再写飞书
+9. **最小阶段执行**：盘点、发布、质量审核和增量维护可独立执行，避免每次重跑完整流程
+10. **AI 审核不替代业务审核**：三维评分用于排序与发现风险，P0 项必须人工确认
