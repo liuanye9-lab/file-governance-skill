@@ -46,6 +46,18 @@ class DedupProcessor:
         elif kind == "version":
             record.version = existing.get("version", 1) + 1
             record.is_new_version = True
+            for field_name in (
+                "drive_url",
+                "doc_url",
+                "doc_token",
+                "record_id",
+                "target_space_id",
+                "target_node_token",
+                "target_page_path",
+            ):
+                value = existing.get(field_name)
+                if value:
+                    setattr(record, field_name, value)
             record.log_step(
                 "dedup",
                 f"内容与《{existing.get('file_name','')}》一致，作为新版本 v{record.version} 处理",

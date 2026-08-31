@@ -151,6 +151,21 @@ class GovernanceControlTests(unittest.TestCase):
         finally:
             pipeline.close()
 
+    def test_high_sensitivity_is_hard_gate_even_if_block_on_omits_it(self):
+        source = self.inbox / "api_key=sk-secret-metadata-001.txt"
+        source.write_text("普通正文", encoding="utf-8")
+        config = local_config(str(self.inbox), self.db_path)
+        config["governance"]["block_on"] = []
+        pipeline = GovernancePipeline(config)
+        try:
+            result = pipeline.run(source="inbox")
+            queue = pipeline.db.get_review_queue()
+            self.assertEqual(result["stats"]["pending_review"], 1)
+            self.assertEqual(queue[0]["sensitivity_level"], "high")
+            self.assertEqual(queue[0]["status"], "pending_review")
+        finally:
+            pipeline.close()
+
     def test_unparsed_media_is_not_production_ready(self):
         path = self.root / "poster.png"
         path.write_bytes(b"\x89PNG\r\n\x1a\nplaceholder")

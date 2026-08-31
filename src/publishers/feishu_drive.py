@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+from ..governance.sensitivity import SensitivityScanner
 from ..models.file_record import FileRecord
 from ..utils.logger import setup_logger
 
@@ -14,11 +15,15 @@ logger = setup_logger()
 class FeishuDrivePublisher:
     def __init__(self, config: dict):
         self.config = config
-        drive_cfg = config.get("feishu", {}).get("drive", {})
+        feishu_cfg = config.get("feishu", {})
+        drive_cfg = feishu_cfg.get("drive", {})
         knowledge_cfg = config.get("knowledge", {})
+        self.provider = str(feishu_cfg.get("provider", "cli")).lower()
+        self.enabled = bool(drive_cfg.get("enabled", True))
         self.root_folder = drive_cfg.get("root_folder", "知识沉淀")
         self.project_name = knowledge_cfg.get("project_name", "默认项目")
         self.cli_path = self._resolve_cli(config.get("feishu", {}).get("cli_path", ""))
+        self._scanner = SensitivityScanner()
         self._folder_cache = {}
         self._root_token = ""
 
@@ -40,7 +45,11 @@ class FeishuDrivePublisher:
 
     @property
     def available(self) -> bool:
-        return bool(self.cli_path)
+        return bool(
+            self.enabled
+            and self.cli_path
+            and self.provider in {"cli", "lark-cli"}
+        )
 
     def upload(self, record: FileRecord) -> str:
         # 飞书 API 拒绝 0 字节文件（code 1061002），提前跳过避免无谓报错。
@@ -51,12 +60,13 @@ class FeishuDrivePublisher:
         category_folder = self._get_or_create_folder(
             record.category or "未分类", root
         )
+        safe_name = self._scanner.redact(record.file_name)
         with tempfile.TemporaryDirectory(prefix="fg-") as staging_dir:
-            staged = Path(staging_dir) / record.file_name
+            staged = Path(staging_dir) / safe_name
             shutil.copy2(record.source_path, staged)
             result = self._run([
-                "drive", "+upload", "--file", f"./{record.file_name}",
-                "--name", record.file_name, "--folder-token", category_folder,
+                "drive", "+upload", "--file", f"./{safe_name}",
+                "--name", safe_name, "--folder-token", category_folder,
                 "--as", "user", "--format", "json",
             ], cwd=staging_dir)
         token = self._find_value(result, "file_token") or self._find_value(result, "token")
@@ -65,14 +75,15 @@ class FeishuDrivePublisher:
         url = f"https://bytedance.larkoffice.com/file/{token}"
         record.drive_url = url
         record.log_step("upload", f"已上传 {url}")
-        logger.info(f"已上传: {record.file_name} -> {url}")
+        logger.info(f"已上传: {safe_name} -> {url}")
         return url
 
     def find_existing_url(self, file_name: str) -> Optional[str]:
         try:
+            safe_name = self._scanner.redact(file_name)
             result = self._run([
                 "drive", "+search", "--as", "user", "--doc-types", "file",
-                "--only-title", "--query", file_name[:30], "--page-size", "5", "--format", "json"
+                "--only-title", "--query", safe_name[:30], "--page-size", "5", "--format", "json"
             ])
             for item in result.get("data", {}).get("results", []):
                 meta = item.get("result_meta", {})
@@ -82,6 +93,24 @@ class FeishuDrivePublisher:
         except Exception as e:
             logger.debug(f"搜索已有文件失败: {e}")
         return None
+
+    def verify_reference(self, url: str) -> bool:
+        if not (self.available and url):
+            return False
+        try:
+            result = self._run([
+                "drive", "+inspect", "--as", "user",
+                "--url", url, "--format", "json",
+            ])
+        except Exception as e:
+            logger.debug(f"引用目标回读失败: {e}")
+            return False
+        token = (
+            self._find_value(result, "token")
+            or self._find_value(result, "file_token")
+            or self._find_value(result, "document_id")
+        )
+        return bool(token)
 
     def _get_project_root(self) -> str:
         if self._root_token:

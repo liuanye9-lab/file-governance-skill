@@ -32,6 +32,16 @@ class FileRecord:
     text_content: str = ""
     drive_url: str = ""
     doc_url: str = ""
+    doc_token: str = ""
+    knowledge_page_status: str = "not_created"
+    readback_verified: bool = False
+    target_space_id: str = ""
+    target_node_token: str = ""
+    target_page_path: str = ""
+    publication_action: str = "create"
+    permission_status: str = "unchecked"
+    permission_issues: list[dict] = field(default_factory=list)
+    source_revision: str = ""
     version: int = 1
     is_new_version: bool = False
     parent_archive: Optional[str] = None
@@ -53,6 +63,14 @@ class FileRecord:
     review_priority: str = ""
     review_cycle_days: int = 0
     next_review_at: Optional[str] = None
+    review_owner: str = ""
+    review_task_guid: str = ""
+    review_task_url: str = ""
+    review_reminder_at: Optional[str] = None
+    media_status: str = "not_applicable"
+    media_evidence: dict = field(default_factory=dict)
+    acceptance_status: str = "pending"
+    acceptance_details: list[dict] = field(default_factory=list)
     error_message: str = ""
     processing_steps: list[dict] = field(default_factory=list)
     record_id: str = ""
@@ -84,8 +102,11 @@ class FileRecord:
             "txt": "txt", "md": "markdown", "json": "json", "html": "html",
             "zip": "zip", "rar": "archive", "7z": "archive",
             "jpg": "image", "jpeg": "image", "png": "image", "gif": "image",
-            "webp": "image", "bmp": "image",
-            "mp3": "audio", "wav": "audio", "mp4": "video", "mov": "video",
+            "webp": "image", "bmp": "image", "tif": "image", "tiff": "image",
+            "mp3": "audio", "wav": "audio", "m4a": "audio", "aac": "audio",
+            "flac": "audio", "ogg": "audio",
+            "mp4": "video", "mov": "video", "mkv": "video", "avi": "video",
+            "webm": "video", "m4v": "video",
         }
         return type_map.get(ext, "other")
 

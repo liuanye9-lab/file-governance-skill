@@ -1,10 +1,12 @@
 from ..models.file_record import FileRecord
 from ..utils.db import GovernanceDB
+from .sensitivity import SensitivityScanner
 
 
 class AuditLogger:
     def __init__(self, db: GovernanceDB):
         self.db = db
+        self.scanner = SensitivityScanner()
 
     def log_pipeline_start(self, total_files: int):
         self.db.log_audit(
@@ -17,8 +19,8 @@ class AuditLogger:
         self.db.log_audit(
             action=f"file_{step}",
             file_id=record.id,
-            file_name=record.file_name,
-            detail=detail,
+            file_name=self.scanner.redact(record.file_name),
+            detail=self.scanner.redact(detail),
             success=success,
         )
 
@@ -26,8 +28,10 @@ class AuditLogger:
         self.db.log_audit(
             action="file_complete" if record.status == "done" else f"file_{record.status}",
             file_id=record.id,
-            file_name=record.file_name,
-            detail=f"分类={record.category}, version={record.version}",
+            file_name=self.scanner.redact(record.file_name),
+            detail=self.scanner.redact(
+                f"分类={record.category}, version={record.version}"
+            ),
             success=(record.status == "done"),
         )
 

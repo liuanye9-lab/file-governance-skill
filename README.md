@@ -12,7 +12,7 @@
 
 ## 一句话概述
 
-拖入文件或说一句话，自动完成 **收集 → 哈希去重 → 元数据提取 → 格式解析 → 智能分类 → 版本控制 → 权限治理 → 飞书沉淀** 全链路治理，输出「人类协作看板 + Agent 结构化上下文 + Dashboard 观察台」三重产物。
+拖入文件或说一句话，自动完成 **收集 → 去重 → 解析 → 分类 → 风险/质量审核 → 目录映射 → 权限治理 → 原件归档 → 标准知识页 → 双表沉淀 → 回读验收 → 持续复核** 全链路治理。
 
 ## 核心能力
 
@@ -24,9 +24,16 @@
 | 🔍 **三级去重** | SHA-256 精确哈希 + 路径去重 + 文件名匹配 |
 | 📚 **版本控制** | 同名同内容文件自动版本链追踪，历史可追溯 |
 | 🛡️ **发布前治理** | 只读盘点、同名冲突、敏感信息脱敏初筛、无法解析清单、确认后发布 |
+| 🗂️ **Wiki 目录接管** | 仅扫描显式授权的 Wiki 子树，生成节点台账并映射分类目标，不扫描全企业飞书 |
+| 🧭 **七类发布决策** | 新增、更新、合并、拆分、引用、待确认、不入库，逐项输出可执行状态与原因 |
 | ✅ **三维质量审核** | 内容可靠、易找易懂、易维护三维评分，输出 production_ready 与 P0/P1/P2 建议 |
+| 🖼️ **媒体证据治理** | 图片/音视频支持 sidecar 或显式注入文字、视频时间码；无 OCR/ASR 证据时保持阻断 |
 | 🔐 **权限自动治理** | 上传即设置 L2-Internal 密级 + tenant_readable（组织内可见） |
+| 📖 **标准知识页** | 将生产就绪内容生成为飞书 Docx 治理页，支持创建/更新、脱敏和创建后回读验证 |
 | 📊 **双通道沉淀** | 飞书多维表格「知识材料」表（人类协作）+「Agent上下文窗口」表（机器消费） |
+| 🕸️ **知识关系图** | 生成来源、分类、知识页与版本关系；可显式同步到已有飞书画板 |
+| 🧪 **统一发布验收** | 同时检查知识页、原始来源、治理表、正文、生产就绪、权限和回读证据 |
+| ⏰ **复核任务闭环** | 到期清单可幂等创建飞书任务，回写负责人、任务 GUID、链接和提醒时间 |
 | 📈 **Dashboard 观察台** | 指标卡、分类环图、文件类型构成、协作进度（黑白灰 iOS/SpaceX 风格） |
 | 📝 **全链路审计** | 每步操作记录 audit log，可追溯可回滚 |
 
@@ -37,6 +44,7 @@
 - Python 3.9+
 - [lark-cli](https://github.com/larksuite/cli)（`npm i -g @larksuite/cli`）并已通过 `lark-cli auth login` 登录
 - 飞书企业账号（需创建一个多维表格 Base）
+- 可选写能力需单独授权：`docx:document:create`、`docx:document:write_only`、`task:task:write`、`board:whiteboard:node:create`
 
 ### 安装
 
@@ -64,6 +72,16 @@ pip3 install -r requirements.txt
        knowledge_table_id: "知识材料表 ID"
        agent_context_table_id: "Agent上下文窗口表 ID"
        url: "Bitable 完整 URL"
+     wiki:
+       enabled: true
+       space_id: "目标知识空间 ID"
+       parent_node_token: "明确授权的目标子树节点"
+   knowledge_pages:
+     enabled: true
+     require_confirmation: true
+   review_tasks:
+     enabled: false
+     owner_open_id: "负责人 open_id"
    knowledge:
      project_name: "你的项目名"
    ```
@@ -83,6 +101,8 @@ python3 src/cli.py plan --url "https://..." # 盘点指定 URL，可重复 --url
 python3 src/cli.py publish --yes           # 发布已确认的计划
 python3 src/cli.py publish --yes --approve-risk # 放行冲突/无法解析项；高敏仍拦截
 python3 src/cli.py review-due              # 查看已到期的知识复核清单
+python3 src/cli.py review-due --create-tasks # 为到期项创建飞书复核任务
+python3 src/cli.py quality-review          # 独立重跑三维质量审核，不修改正文
 python3 src/cli.py refresh                # 全量刷新（清空重跑）
 python3 src/cli.py govern-permissions     # 批量治理文件权限
 python3 src/cli.py stats                  # 查看治理统计
@@ -96,22 +116,24 @@ python3 scripts/start_inbox.py            # 启动拖拽收件箱 Web UI (127.0.
     wechat / inbox / local_folder（可插拔 Collector 接口）
         ↓
 [处理流水线 (Processors)]
-    哈希计算 → 元数据提取 → 去重检查 → 格式解析 → 智能分类
+    哈希计算 → 元数据提取 → 去重检查 → 格式解析/媒体证据 → 智能分类
         ↓
 [治理层 (Governance)]
-    版本控制 → 敏感初筛 → 冲突检测 → 三维质量评分 → production_ready 判定
+    Wiki 子树盘点 → 目录映射 → 版本/敏感/冲突 → 三维质量评分 → 七类发布决策
         ↓
 [发布门禁]
     自动模式：低风险自动发布，高敏/冲突/无法解析拦截
     审核模式：plan 只读盘点 → 人工确认 → publish 发布
         ↓
 [发布层 (Publishers)]
-    权限治理 → 飞书云空间上传 → 知识材料表写入 → Agent上下文窗口同步
+    权限治理 → 原件上传 → 标准 Docx 知识页 → Bitable 双表 → 回读验收
         ↓
 [输出]
     ├── 知识材料表（人类：分类/标签/摘要/协作状态/直达链接/审核结论）
     ├── Agent上下文窗口（机器：Project/Coverage/Taxonomy/Knowledge/Governance Rule 五类结构化 JSON）
-    └── Dashboard 观察台（指标卡/环图/条形图/进度条）
+    ├── 标准知识页（治理概览/结构化正文/来源/例外/变更记录）
+    ├── 知识关系图（本地 nodes/edges，可选同步飞书画板）
+    └── Dashboard 观察台与飞书复核任务
 ```
 
 ## 治理运行模式
@@ -122,6 +144,8 @@ python3 scripts/start_inbox.py            # 启动拖拽收件箱 Web UI (127.0.
 - **门禁模式**：配置 `publication_mode: gated` 后，所有资料先执行 `plan`，确认后再执行 `publish --yes`。
 - **质量审核**：每份资料按内容可靠、易找易懂、易维护三维评分，生成 `production_ready` 和 P0/P1/P2 优先级。
 - **持续运维**：按文档类型自动安排 30/90/180 天复核周期，使用 `review-due` 获取到期清单。
+- **正式知识页**：显式启用 `knowledge_pages.enabled` 后，默认要求先确认计划，再创建或更新知识页并回读验收。
+- **媒体边界**：未配置 OCR/ASR provider 且不存在可追溯 sidecar/注入文本时，不生成伪正文，资料保持 P0 阻断。
 
 ## 目录结构
 
@@ -137,9 +161,9 @@ file-governance/
 │   ├── pipeline.py             # 治理流水线编排
 │   ├── models/                 # 数据模型
 │   ├── collectors/             # 多来源采集器（可插拔）
-│   ├── processors/             # 处理模块（哈希/元数据/解析/分类/去重）
-│   ├── governance/             # 治理模块（版本/权限/审计）
-│   ├── publishers/             # 发布模块（飞书 Drive/Bitable/卡片）
+│   ├── processors/             # 处理模块（哈希/元数据/解析/媒体/分类/去重）
+│   ├── governance/             # 治理模块（版本/权限/Wiki目录/质量/验收/审计）
+│   ├── publishers/             # 发布模块（Drive/Docx/Bitable/任务/关系图/卡片）
 │   └── utils/                  # 工具（配置/数据库/日志）
 ├── scripts/start_inbox.py      # 收件箱 Web UI
 ├── templates/inbox.html        # 收件箱页面模板
@@ -158,6 +182,7 @@ file-governance/
 7. **可扩展架构**：Source Adapter / Processor / Publisher 均可插拔扩展
 8. **先盘点再发布**：批量或高风险任务先生成台账、冲突/敏感/无法解析清单，不把“处理完成”混同于“可生产使用”
 9. **AI 审核不替代业务审核**：评分用于排序和发现问题，P0 风险项必须由人确认
+10. **不虚构后台能力**：Skill 只创建可追踪的任务和提醒；到期后由负责人或 Agent 再次调用执行复核
 
 ## 飞书多维表格 Schema
 

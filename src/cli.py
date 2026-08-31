@@ -88,7 +88,23 @@ def cmd_stats(args):
 def cmd_review_due(args):
     pipeline = GovernancePipeline()
     try:
-        print(json.dumps(pipeline.due_reviews(args.as_of), ensure_ascii=False, indent=2))
+        print(json.dumps(
+            pipeline.due_reviews(args.as_of, create_tasks=args.create_tasks),
+            ensure_ascii=False,
+            indent=2,
+        ))
+    finally:
+        pipeline.close()
+
+
+def cmd_quality_review(args):
+    pipeline = GovernancePipeline()
+    try:
+        print(json.dumps(
+            pipeline.quality_review(record_ids=args.record_ids),
+            ensure_ascii=False,
+            indent=2,
+        ))
     finally:
         pipeline.close()
 
@@ -152,7 +168,24 @@ def main():
 
     p_due = sub.add_parser("review-due", help="列出已到期的知识复核清单")
     p_due.add_argument("--as-of", default="", help="截止日期 YYYY-MM-DD，默认今天")
+    p_due.add_argument(
+        "--create-tasks",
+        action="store_true",
+        help="为到期记录创建飞书复核任务（需显式启用 review_tasks）",
+    )
     p_due.set_defaults(func=cmd_review_due)
+
+    p_quality = sub.add_parser(
+        "quality-review",
+        help="重新执行三维质量审核，不修改知识正文",
+    )
+    p_quality.add_argument(
+        "--record-id",
+        dest="record_ids",
+        action="append",
+        help="仅审核指定记录，可重复",
+    )
+    p_quality.set_defaults(func=cmd_quality_review)
 
     p_init = sub.add_parser("init", help="初始化配置文件")
     p_init.add_argument("--force", action="store_true")

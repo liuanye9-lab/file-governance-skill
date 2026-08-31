@@ -41,6 +41,16 @@ class GovernanceDB:
                 text_content TEXT,
                 drive_url TEXT,
                 doc_url TEXT,
+                doc_token TEXT,
+                knowledge_page_status TEXT DEFAULT 'not_created',
+                readback_verified INTEGER DEFAULT 0,
+                target_space_id TEXT,
+                target_node_token TEXT,
+                target_page_path TEXT,
+                publication_action TEXT DEFAULT 'create',
+                permission_status TEXT DEFAULT 'unchecked',
+                permission_issues TEXT,
+                source_revision TEXT,
                 version INTEGER DEFAULT 1,
                 parent_archive TEXT,
                 security_level TEXT DEFAULT 'L2-Internal',
@@ -60,6 +70,14 @@ class GovernanceDB:
                 review_priority TEXT,
                 review_cycle_days INTEGER DEFAULT 0,
                 next_review_at TEXT,
+                review_owner TEXT,
+                review_task_guid TEXT,
+                review_task_url TEXT,
+                review_reminder_at TEXT,
+                media_status TEXT DEFAULT 'not_applicable',
+                media_evidence TEXT,
+                acceptance_status TEXT DEFAULT 'pending',
+                acceptance_details TEXT,
                 error_message TEXT,
                 processing_steps TEXT,
                 record_id TEXT,
@@ -119,6 +137,24 @@ class GovernanceDB:
             "review_priority": "TEXT",
             "review_cycle_days": "INTEGER DEFAULT 0",
             "next_review_at": "TEXT",
+            "doc_token": "TEXT",
+            "knowledge_page_status": "TEXT DEFAULT 'not_created'",
+            "readback_verified": "INTEGER DEFAULT 0",
+            "target_space_id": "TEXT",
+            "target_node_token": "TEXT",
+            "target_page_path": "TEXT",
+            "publication_action": "TEXT DEFAULT 'create'",
+            "permission_status": "TEXT DEFAULT 'unchecked'",
+            "permission_issues": "TEXT",
+            "source_revision": "TEXT",
+            "review_owner": "TEXT",
+            "review_task_guid": "TEXT",
+            "review_task_url": "TEXT",
+            "review_reminder_at": "TEXT",
+            "media_status": "TEXT DEFAULT 'not_applicable'",
+            "media_evidence": "TEXT",
+            "acceptance_status": "TEXT DEFAULT 'pending'",
+            "acceptance_details": "TEXT",
         }
         for col, column_type in migrations.items():
             if col not in cols:
@@ -134,20 +170,27 @@ class GovernanceDB:
         sensitivity_findings = json.dumps(record.get("sensitivity_findings", []), ensure_ascii=False)
         conflict_details = json.dumps(record.get("conflict_details", []), ensure_ascii=False)
         quality_dimensions = json.dumps(record.get("quality_dimensions", {}), ensure_ascii=False)
+        permission_issues = json.dumps(record.get("permission_issues", []), ensure_ascii=False)
+        media_evidence = json.dumps(record.get("media_evidence", {}), ensure_ascii=False)
+        acceptance_details = json.dumps(record.get("acceptance_details", []), ensure_ascii=False)
         self.conn.execute("""
             INSERT OR REPLACE INTO files
             (id, source_path, file_name, file_ext, file_type, file_size, file_hash,
              source, source_session, captured_at, created_at, modified_at, author, page_count,
              status, domain, doc_type, category, sub_category, tags, summary, text_content,
-             drive_url, doc_url, version, parent_archive,
+             drive_url, doc_url, doc_token, knowledge_page_status, readback_verified,
+             target_space_id, target_node_token, target_page_path, publication_action,
+             permission_status, permission_issues, source_revision,
+             version, parent_archive,
              security_level, share_permission, collaboration_status,
              human_tags, review_note, review_conclusion,
              sensitivity_level, sensitivity_findings, conflict_status, conflict_details,
              quality_score, quality_dimensions, production_ready, governance_action, review_priority,
-             review_cycle_days, next_review_at,
+             review_cycle_days, next_review_at, review_owner, review_task_guid, review_task_url,
+             review_reminder_at, media_status, media_evidence, acceptance_status, acceptance_details,
              error_message, processing_steps,
              record_id, agent_record_id)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             record.get("id"), record.get("source_path"), record.get("file_name"),
             record.get("file_ext"), record.get("file_type"), record.get("file_size"),
@@ -158,6 +201,12 @@ class GovernanceDB:
             record.get("category"), record.get("sub_category"),
             tags, record.get("summary"), record.get("text_content", ""),
             record.get("drive_url", ""), record.get("doc_url", ""),
+            record.get("doc_token", ""), record.get("knowledge_page_status", "not_created"),
+            1 if record.get("readback_verified", False) else 0,
+            record.get("target_space_id", ""), record.get("target_node_token", ""),
+            record.get("target_page_path", ""), record.get("publication_action", "create"),
+            record.get("permission_status", "unchecked"), permission_issues,
+            record.get("source_revision", ""),
             record.get("version", 1), record.get("parent_archive"),
             record.get("security_level", "L2-Internal"),
             record.get("share_permission", "tenant_readable"),
@@ -169,6 +218,10 @@ class GovernanceDB:
             1 if record.get("production_ready", False) else 0,
             record.get("governance_action", "publish"), record.get("review_priority", ""),
             record.get("review_cycle_days", 0), record.get("next_review_at"),
+            record.get("review_owner", ""), record.get("review_task_guid", ""),
+            record.get("review_task_url", ""), record.get("review_reminder_at"),
+            record.get("media_status", "not_applicable"), media_evidence,
+            record.get("acceptance_status", "pending"), acceptance_details,
             record.get("error_message", ""), steps,
             record.get("record_id", ""), record.get("agent_record_id", ""),
         ))
@@ -239,12 +292,16 @@ class GovernanceDB:
                 ("sensitivity_findings", []),
                 ("conflict_details", []),
                 ("quality_dimensions", {}),
+                ("permission_issues", []),
+                ("media_evidence", {}),
+                ("acceptance_details", []),
             ):
                 try:
                     d[field] = json.loads(d.get(field) or json.dumps(default))
                 except Exception:
                     d[field] = default
             d["production_ready"] = bool(d.get("production_ready"))
+            d["readback_verified"] = bool(d.get("readback_verified"))
             result.append(d)
         return result
 
@@ -263,6 +320,9 @@ class GovernanceDB:
                 ("sensitivity_findings", []),
                 ("conflict_details", []),
                 ("quality_dimensions", {}),
+                ("permission_issues", []),
+                ("media_evidence", {}),
+                ("acceptance_details", []),
                 ("processing_steps", []),
             ):
                 try:
@@ -274,18 +334,50 @@ class GovernanceDB:
                 t.strip() for t in (record.get("human_tags") or "").split(",") if t.strip()
             ]
             record["production_ready"] = bool(record.get("production_ready"))
+            record["readback_verified"] = bool(record.get("readback_verified"))
             result.append(record)
         return result
 
     def get_due_reviews(self, as_of: str) -> list[dict]:
         rows = self.conn.execute(
             "SELECT id, file_name, domain, doc_type, category, version, "
-            "quality_score, production_ready, review_priority, next_review_at, drive_url "
+            "quality_score, production_ready, review_priority, next_review_at, review_owner, "
+            "review_task_guid, review_task_url, review_reminder_at, drive_url, doc_url "
             "FROM files WHERE status = 'done' AND COALESCE(next_review_at, '') != '' "
             "AND next_review_at <= ? ORDER BY next_review_at ASC, review_priority ASC",
             (as_of,),
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def update_review_task(
+        self,
+        record_id: str,
+        task_guid: str,
+        task_url: str,
+        owner: str = "",
+        reminder_at: str = "",
+    ):
+        self.conn.execute(
+            "UPDATE files SET review_task_guid = ?, review_task_url = ?, "
+            "review_owner = ?, review_reminder_at = ? WHERE id = ?",
+            (task_guid, task_url, owner, reminder_at, record_id),
+        )
+        self.conn.commit()
+
+    def update_knowledge_page(
+        self,
+        record_id: str,
+        doc_token: str,
+        doc_url: str,
+        status: str,
+        readback_verified: bool,
+    ):
+        self.conn.execute(
+            "UPDATE files SET doc_token = ?, doc_url = ?, knowledge_page_status = ?, "
+            "readback_verified = ? WHERE id = ?",
+            (doc_token, doc_url, status, 1 if readback_verified else 0, record_id),
+        )
+        self.conn.commit()
 
     def add_version(self, file_hash: str, file_name: str, version: int, source_path: str, drive_url: str = "", notes: str = ""):
         self.conn.execute(

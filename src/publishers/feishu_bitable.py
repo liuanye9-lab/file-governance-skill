@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from ..governance.sensitivity import SensitivityScanner
 from ..models.file_record import FileRecord
 from ..utils.db import GovernanceDB
 from ..utils.logger import setup_logger
@@ -16,11 +17,15 @@ class FeishuBitablePublisher:
     def __init__(self, config: dict, db: GovernanceDB):
         self.config = config
         self.db = db
-        bitable_cfg = config.get("feishu", {}).get("bitable", {})
+        feishu_cfg = config.get("feishu", {})
+        bitable_cfg = feishu_cfg.get("bitable", {})
+        self.provider = str(feishu_cfg.get("provider", "cli")).lower()
         self.enabled = bitable_cfg.get("enabled", False)
         self.base_token = bitable_cfg.get("base_token", "")
         self.knowledge_table_id = bitable_cfg.get("knowledge_table_id") or bitable_cfg.get("table_id", "")
         self.agent_table_id = bitable_cfg.get("agent_context_table_id") or bitable_cfg.get("agent_table_id", "")
+        self.knowledge_page_field = bitable_cfg.get("knowledge_page_field", "")
+        self._scanner = SensitivityScanner()
         self.cli_path = self._resolve_cli(config.get("feishu", {}).get("cli_path", ""))
         self.knowledge_fields = [
             "文件名", "分类", "子分类", "标签", "摘要", "文件类型",
@@ -45,7 +50,13 @@ class FeishuBitablePublisher:
 
     @property
     def available(self) -> bool:
-        return bool(self.cli_path and self.base_token and self.knowledge_table_id)
+        return bool(
+            self.enabled
+            and self.cli_path
+            and self.base_token
+            and self.knowledge_table_id
+            and self.provider in {"cli", "lark-cli"}
+        )
 
     def publish_record(self, record: FileRecord) -> Optional[str]:
         if not self.available:
@@ -53,10 +64,10 @@ class FeishuBitablePublisher:
         fields = self._build_knowledge_fields(record)
         try:
             result = self._run_bitable([
-                "base", "+record-create", "--as", "user",
+                "base", "+record-upsert", "--as", "user",
                 "--base-token", self.base_token,
                 "--table-id", self.knowledge_table_id,
-                "--fields", json.dumps(fields, ensure_ascii=False),
+                "--json", json.dumps(fields, ensure_ascii=False),
             ])
             record_id = self._find_value(result, "record_id") or self._find_value(result, "recordId")
             if record_id:
@@ -67,6 +78,25 @@ class FeishuBitablePublisher:
         except Exception as e:
             logger.debug(f"Bitable 写入失败: {e}")
             return None
+
+    def update_record(self, record: FileRecord) -> bool:
+        if not (self.available and record.record_id):
+            return False
+        try:
+            self._run_bitable([
+                "base", "+record-upsert", "--as", "user",
+                "--base-token", self.base_token,
+                "--table-id", self.knowledge_table_id,
+                "--record-id", record.record_id,
+                "--json", json.dumps(
+                    self._build_knowledge_fields(record),
+                    ensure_ascii=False,
+                ),
+            ])
+            return True
+        except Exception as e:
+            logger.debug(f"Bitable 记录更新失败: {record.record_id}: {e}")
+            return False
 
     def sync_agent_context(self, records: list[FileRecord]) -> dict:
         if not (self.available and self.agent_table_id):
@@ -84,19 +114,19 @@ class FeishuBitablePublisher:
                     existing_id = state.get("records", {}).get(key, "")
                     if existing_id:
                         self._run_bitable([
-                            "base", "+record-update", "--as", "user",
+                            "base", "+record-upsert", "--as", "user",
                             "--base-token", self.base_token,
                             "--table-id", self.agent_table_id,
                             "--record-id", existing_id,
-                            "--fields", json.dumps(fields, ensure_ascii=False),
+                            "--json", json.dumps(fields, ensure_ascii=False),
                         ])
                         updated += 1
                 else:
                     result = self._run_bitable([
-                        "base", "+record-create", "--as", "user",
+                        "base", "+record-upsert", "--as", "user",
                         "--base-token", self.base_token,
                         "--table-id", self.agent_table_id,
-                        "--fields", json.dumps(fields, ensure_ascii=False),
+                        "--json", json.dumps(fields, ensure_ascii=False),
                     ])
                     rid = self._find_value(result, "record_id") or self._find_value(result, "recordId")
                     if rid:
@@ -120,7 +150,7 @@ class FeishuBitablePublisher:
         try:
             for _ in range(max_rounds):
                 result = self._run_bitable([
-                    "base", "records", "list", "--as", "user",
+                    "base", "+record-list", "--as", "user",
                     "--base-token", self.base_token,
                     "--table-id", table_id, "--page-size", "50",
                 ])
@@ -146,38 +176,78 @@ class FeishuBitablePublisher:
             logger.debug(f"清空表失败: {e}")
         return deleted
 
+    def verify_record(self, record: FileRecord) -> bool:
+        if not (self.available and record.record_id):
+            return False
+        try:
+            result = self._run_bitable([
+                "base", "+record-get", "--as", "user",
+                "--base-token", self.base_token,
+                "--table-id", self.knowledge_table_id,
+                "--record-id", record.record_id,
+                "--field-id", "文件名",
+                "--field-id", "同步状态",
+                "--format", "json",
+            ])
+        except Exception as e:
+            logger.debug(f"Bitable 回读失败: {record.record_id}: {e}")
+            return False
+        found = self._find_record(result, record.record_id)
+        if not found:
+            return False
+        fields = found.get("fields", found)
+        return fields.get("文件名") == self._scanner.redact(
+            record.file_name
+        )
+
     def _build_knowledge_fields(self, record: FileRecord) -> dict:
         from datetime import datetime
+        safe_name = self._scanner.redact(record.file_name)
         governance_note = (
-            f"行业={record.domain or '未识别'}；类型={record.doc_type or '未识别'}；"
+            f"行业={self._scanner.redact(record.domain or '未识别')}；"
+            f"类型={self._scanner.redact(record.doc_type or '未识别')}；"
             f"质量={record.quality_score}；敏感级别={record.sensitivity_level}；"
+            f"发布动作={record.publication_action}；验收={record.acceptance_status}；"
+            f"权限预检={record.permission_status}；"
             f"复核优先级={record.review_priority or '无'}；"
             f"下次复核={record.next_review_at or '未安排'}"
         )
         note = "；".join(part for part in (record.review_note, governance_note) if part)
-        return {
-            "文件名": record.file_name,
-            "分类": record.category or "待人工复核",
-            "子分类": record.sub_category or "",
-            "标签": ", ".join(record.tags),
-            "摘要": record.summary or "",
-            "文件类型": record.file_type or "other",
+        fields = {
+            "文件名": safe_name,
+            "分类": [self._scanner.redact(record.category or "待人工复核")],
+            "子分类": (
+                [self._scanner.redact(record.sub_category)]
+                if record.sub_category else []
+            ),
+            "标签": [
+                self._scanner.redact(tag) for tag in record.tags
+            ],
+            "摘要": self._scanner.redact(record.summary or ""),
+            "文件类型": [record.file_type or "other"],
             "文件大小": round(record.file_size / 1024, 1) if record.file_size else 0,
-            "来源": record.source,
-            "来源会话": record.source_session or "",
-            "直达链接": {"link": record.drive_url, "text": record.file_name} if record.drive_url else "",
-            "协作状态": record.collaboration_status,
-            "人工标签": ", ".join(record.human_tags),
+            "来源": [record.source or "unknown"],
+            "来源会话": self._scanner.redact(record.source_session or ""),
+            "直达链接": record.drive_url or "",
+            "协作状态": [record.collaboration_status],
+            "人工标签": [
+                self._scanner.redact(tag) for tag in record.human_tags
+            ],
             "协作备注": note,
             "审核结论": record.review_conclusion or (
                 "生产就绪" if record.production_ready else "待人工审核"
             ),
             "版本号": record.version,
             "父文件": record.parent_archive or "",
-            "密级": record.security_level,
-            "同步状态": "已完成" if record.status == "done" else record.status,
+            "密级": [record.security_level],
+            "同步状态": [
+                "已完成" if record.status == "done" else record.status
+            ],
             "处理时间": datetime.now().isoformat(),
         }
+        if self.knowledge_page_field and record.doc_url:
+            fields[self.knowledge_page_field] = record.doc_url
+        return fields
 
     def _build_agent_context(self, records: list[FileRecord]) -> list[dict]:
         from datetime import datetime
@@ -195,7 +265,7 @@ class FeishuBitablePublisher:
             "key": f"project:{project_name}",
             "fields": {
                 "Context Key": f"project:{project_name}",
-                "类型": "Project",
+                "类型": ["Project"],
                 "内容": json.dumps({
                     "project_name": project_name,
                     "total_materials": len(done),
@@ -208,7 +278,7 @@ class FeishuBitablePublisher:
             "key": "coverage:overview",
             "fields": {
                 "Context Key": "coverage:overview",
-                "类型": "Coverage",
+                "类型": ["Coverage"],
                 "内容": json.dumps({
                     "total": len(done),
                     "by_category": {c: len(rs) for c, rs in categories.items()},
@@ -224,7 +294,7 @@ class FeishuBitablePublisher:
             "key": "taxonomy:categories",
             "fields": {
                 "Context Key": "taxonomy:categories",
-                "类型": "Taxonomy",
+                "类型": ["Taxonomy"],
                 "内容": json.dumps(self.config.get("taxonomy", {}), ensure_ascii=False),
                 "摘要": "分类体系定义",
             }
@@ -234,17 +304,20 @@ class FeishuBitablePublisher:
                 "key": f"knowledge:{r.file_hash[:16]}",
                 "fields": {
                     "Context Key": f"knowledge:{r.file_hash[:16]}",
-                    "类型": "Knowledge Record",
+                    "类型": ["Knowledge Record"],
                     "内容": json.dumps({
-                        "file_name": r.file_name,
+                        "file_name": self._scanner.redact(r.file_name),
                         "domain": r.domain,
                         "doc_type": r.doc_type,
                         "category": r.category,
                         "sub_category": r.sub_category,
                         "tags": r.tags,
-                        "summary": r.summary,
+                        "summary": self._scanner.redact(r.summary or ""),
                         "drive_url": r.drive_url,
+                        "doc_url": r.doc_url,
+                        "doc_token": r.doc_token,
                         "source": r.source,
+                        "source_revision": r.source_revision,
                         "version": r.version,
                         "file_type": r.file_type,
                         "sensitivity_level": r.sensitivity_level,
@@ -255,15 +328,25 @@ class FeishuBitablePublisher:
                         "review_cycle_days": r.review_cycle_days,
                         "next_review_at": r.next_review_at,
                         "conflict_status": r.conflict_status,
+                        "publication_action": r.publication_action,
+                        "target_page_path": r.target_page_path,
+                        "permission_status": r.permission_status,
+                        "knowledge_page_status": r.knowledge_page_status,
+                        "readback_verified": r.readback_verified,
+                        "acceptance_status": r.acceptance_status,
+                        "review_owner": r.review_owner,
+                        "review_task_url": r.review_task_url,
                     }, ensure_ascii=False),
-                    "摘要": r.summary or r.file_name,
+                    "摘要": self._scanner.redact(
+                        r.summary or r.file_name
+                    ),
                 }
             })
         output.append({
             "key": "governance:rules",
             "fields": {
                 "Context Key": "governance:rules",
-                "类型": "Governance Rule",
+                "类型": ["Governance Rule"],
                 "内容": json.dumps({
                     "default_security_level": "L2-Internal",
                     "default_share_permission": "tenant_readable",
@@ -313,4 +396,21 @@ class FeishuBitablePublisher:
                 f = cls._find_value(v, key)
                 if f is not None:
                     return f
+        return None
+
+    @classmethod
+    def _find_record(cls, value, record_id: str):
+        if isinstance(value, dict):
+            current_id = value.get("record_id") or value.get("recordId")
+            if current_id == record_id:
+                return value
+            for child in value.values():
+                found = cls._find_record(child, record_id)
+                if found:
+                    return found
+        elif isinstance(value, list):
+            for child in value:
+                found = cls._find_record(child, record_id)
+                if found:
+                    return found
         return None

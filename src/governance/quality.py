@@ -117,7 +117,7 @@ class QualityReviewer:
             return False
         text = record.text_content.strip()
         if record.file_type in {"image", "audio", "video"}:
-            return True
+            return record.media_status != "resolved" or not text
         if record.file_type == "zip" and text.startswith("[压缩包]"):
             return True
         return record.file_type in self.PARSEABLE_TYPES and not text

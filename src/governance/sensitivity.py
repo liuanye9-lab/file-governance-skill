@@ -27,7 +27,27 @@ class SensitivityScanner:
     LEVEL_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3}
 
     def process(self, record: FileRecord) -> FileRecord:
-        text = record.text_content or ""
+        text = "\n".join(
+            str(value)
+            for value in (
+                record.file_name,
+                record.source_path,
+                record.source_session,
+                record.author,
+                record.domain,
+                record.doc_type,
+                record.category,
+                record.sub_category,
+                record.tags,
+                record.human_tags,
+                record.target_page_path,
+                record.summary,
+                record.text_content,
+                record.review_note,
+                record.review_conclusion,
+            )
+            if value
+        )
         findings = []
         highest = "none"
         for kind, level, pattern in self.PATTERNS:
@@ -48,6 +68,28 @@ class SensitivityScanner:
             record.text_content = self.redact(record.text_content)
             if record.summary:
                 record.summary = self.redact(record.summary)
+            record.source_session = self.redact(record.source_session)
+            record.author = (
+                self.redact(record.author) if record.author else record.author
+            )
+            record.tags = [self.redact(tag) for tag in record.tags]
+            record.human_tags = [
+                self.redact(tag) for tag in record.human_tags
+            ]
+            for field_name in (
+                "domain",
+                "doc_type",
+                "category",
+                "sub_category",
+                "target_page_path",
+            ):
+                value = getattr(record, field_name, None)
+                if value:
+                    setattr(record, field_name, self.redact(value))
+            record.review_note = self.redact(record.review_note)
+            record.review_conclusion = self.redact(
+                record.review_conclusion
+            )
         if highest == "high":
             record.governance_action = "hold"
             record.review_priority = "P0"

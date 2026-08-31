@@ -54,6 +54,31 @@ feishu:
     agent_context_table_id: ""  # "Agent上下文窗口"表 ID
     dashboard_id: ""        # Dashboard ID（可选）
     url: ""                 # Bitable 完整 URL，用于卡片跳转
+    knowledge_page_field: ""  # 可选：知识材料表中的知识页 URL 字段名
+  wiki:
+    enabled: false          # 显式开启后只盘点该授权范围并映射目录
+    space_id: ""            # 目标知识空间；个人文档库可填 my_library
+    parent_node_token: ""   # 可选：限定到目标子树
+    base_url: "https://bytedance.larkoffice.com"
+    max_nodes: 500          # 只遍历授权子树，限制节点总量
+    max_depth: 8
+
+knowledge_pages:
+  enabled: false
+  require_confirmation: true
+  template_version: "v1"
+  max_body_chars: 30000
+
+review_tasks:
+  enabled: false
+  owner_open_id: ""         # 负责人 open_id；留空则创建无负责人任务
+  reminder: "1d"            # 到期前提醒
+  tasklist_id: ""
+
+knowledge_graph:
+  enabled: false
+  whiteboard_token: ""     # 仅更新显式指定的现有画板
+  overwrite: true          # 每次写入完整快照，避免累积重复节点
 
 knowledge:
   project_name: "默认项目"
@@ -95,6 +120,8 @@ governance:
 processing:
   max_text_length: 8000
   ocr_enabled: false
+  asr_enabled: false
+  media_sidecar_enabled: true
   link_fetch_enabled: false
 
 db:

@@ -1,13 +1,13 @@
 ---
 name: "file-governance"
-description: "企业级文件与数据治理 Skill：从微信/本地/多来源自动收集文件，经格式转换、元数据提取、分类标签、去重版本控制后安全沉淀到飞书多维表格+云空间。Invoke when user says '沉淀知识'/'治理文件'/'整理资料'/'sync files'/'governance'，或需要将分散文件统一归档到飞书知识库时。"
+description: "企业级文件与数据治理 Skill：从微信/本地/URL 等来源收集资料，经解析、分类、去重、风险与质量门禁后，生成飞书标准知识页、多维表格人机双通道、关系图和复核任务。Invoke when user says '沉淀知识'/'治理文件'/'整理资料'/'sync files'/'governance'，或需要将分散文件统一归档到飞书知识库时。"
 ---
 
 # File Governance · 企业级文件与数据治理 Skill
 
 ## 一句话概述
 
-**表层操作极简，底层逻辑复杂** — 拖入文件或说一句话，自动完成收集→解析→分类→去重→版本→权限→飞书沉淀全链路治理，输出「人类协作看板 + Agent 上下文窗口 + Dashboard 观察台」三重产物。
+**表层操作极简，底层逻辑复杂** — 拖入文件或说一句话，完成收集→解析→分类→风险/质量审核→目录映射→确认发布→标准知识页→双表沉淀→回读验收→持续复核。
 
 ---
 
@@ -34,10 +34,17 @@ description: "企业级文件与数据治理 Skill：从微信/本地/多来源�
 | **版本控制** | 同名/同内容文件版本链追踪，版本历史可追溯 | ✅ |
 | **元数据提取** | 文件大小、类型、创建/修改时间、作者、页数、来源会话 | ✅ |
 | **发布前盘点** | 只读生成资料台账、目录映射建议、冲突清单、敏感清单、无法解析清单和发布计划 | ✅ |
+| **Wiki 子树接管** | 只读取用户显式配置的 space/node 范围，生成节点台账、观察权限并映射分类目标 | ✅ |
+| **七类发布决策** | create/update/merge/split/reference/pending/exclude，输出逐项状态、原因和权限缺口 | ✅ |
 | **敏感与冲突治理** | 脱敏证据初筛；高敏、同名不同内容、无法解析项自动进入 P0 待审核，不自动发布 | ✅ |
 | **AI 质量审核** | 按“内容可靠、易找易懂、易维护”评分，生成 production_ready 与 P0/P1/P2 建议 | ✅ |
+| **媒体证据治理** | 图片/音视频读取可追溯 sidecar 或显式注入文本，解析视频时间码；无 OCR/ASR 证据不生成伪正文 | ✅ |
 | **权限治理** | 自动设置密级（L2-Internal）+ tenant_readable（组织内可见） | ✅ |
+| **标准知识页** | 生产就绪资料生成飞书 Docx 治理页，支持创建/更新、脱敏和创建后回读 | ✅ |
 | **双通道沉淀** | 飞书多维表格「知识材料」表（人类协作）+「Agent上下文窗口」表（机器消费，含 domain/doc_type 结构化字段） | ✅ |
+| **统一发布验收** | 校验知识页、原始来源、治理表、正文、production_ready、权限和回读证据 | ✅ |
+| **知识关系图** | 输出分类/知识/来源/版本 nodes+edges；可选同步到显式配置的飞书画板 | ✅ |
+| **持续复核任务** | 30/90/180 天到期清单，幂等创建飞书任务并回写负责人、GUID、链接和提醒 | ✅ |
 | **Dashboard 观察台** | 指标卡、分类环图、文件类型构成、覆盖状态、协作进度 | ✅ |
 | **审计追溯** | 全链路处理日志、状态记录、失败重试 | ✅ |
 | **飞书机器人** | 通过飞书消息直接发送文件即时沉淀 | 🔌 预留 |
@@ -87,6 +94,10 @@ python3 src/cli.py publish --yes --approve-risk
 
 # 持续运维：列出到期复核知识
 python3 src/cli.py review-due
+python3 src/cli.py review-due --create-tasks
+
+# 独立质检：不重新采集、不上传、不修改正文
+python3 src/cli.py quality-review
 
 # 全量刷新（清空重跑）
 python3 src/cli.py refresh
@@ -108,26 +119,32 @@ python3 src/cli.py govern-permissions
      ↓
 [格式解析] → 多格式统一文本提取（含 ZIP 展开、大文件分片）
      ↓
+[媒体证据] → sidecar/显式文本/OCR-ASR provider；无证据保持 P0 阻断
+     ↓
 [智能分类] → 内容规则 + 可扩展 LLM → 行业/文档类型/项目分类/标签/第一性原理摘要
      ↓
 [版本检测] → 同名同哈希 → 版本链关联；内容变更 → 新版本
      ↓
-[治理审查] → 敏感初筛/冲突检测/无法解析 → 三维质量评分 → production_ready
+[治理审查] → Wiki 目录映射/权限预检 → 敏感/冲突/质量 → 七类发布决策
      ↓
 [发布门禁] → 自动模式低风险直发；高风险待审核 / gated 模式全部先盘点
      ↓
 [权限治理] → 密级 L2-Internal → tenant_readable 组织内可见
      ↓
-[飞书沉淀] → 上传 Drive → 写入知识材料表 → 同步 Agent 上下文窗口
+[飞书沉淀] → 上传原件 → 创建/更新标准 Docx 知识页 → 写入 Bitable 双表
      ↓
-[Dashboard 刷新] → 指标卡/环图/条形图自动更新
+[统一验收] → 知识页/来源/治理表/正文/权限/回读证据必须一致
      ↓
-[审计记录] → 本地 SQLite 记录全链路状态
+[关系与运维] → 知识关系图 → Dashboard → 到期飞书任务 → SQLite 审计
 ```
 
 ---
 
-## 数据架构（双通道 + Dashboard）
+## 数据架构（知识页 + 双通道 + 关系图）
+
+### 0. 标准知识页（正式知识成品）
+
+生产就绪资料可生成飞书 Docx，统一包含治理概览、结构化正文、来源、例外和变更记录。原始文件保留为来源证据，知识页创建后必须回读验证；未验证成功不计为发布完成。
 
 ### 1. 知识材料表（给人看）
 
@@ -165,7 +182,7 @@ python3 src/cli.py govern-permissions
 - **Knowledge Record**: 每个文件的结构化摘要+直达链接
 - **Governance Rule**: 治理规则、分类标准、权限策略
 
-### 3. Dashboard 观察台
+### 3. 知识关系图与 Dashboard
 
 可视化面板（黑白灰 SpaceX/iOS 风格）：
 
@@ -174,6 +191,7 @@ python3 src/cli.py govern-permissions
 - 文件类型条形图：格式构成
 - 识别覆盖状态饼图：成功/跳过/失败
 - 协作进度条：待审核/已确认/已归档
+- 关系图：项目→分类→知识页→原始来源，以及版本 supersedes 关系
 
 飞书看板直达：配置文件 `feishu.bitable.url` 字段。
 
@@ -199,6 +217,7 @@ file-governance/
 │   │   ├── hasher.py           # 哈希计算
 │   │   ├── metadata.py         # 元数据提取
 │   │   ├── parser.py           # 多格式解析
+│   │   ├── media.py            # 媒体证据、sidecar、时间码
 │   │   ├── classifier.py       # LLM/规则分类
 │   │   └── dedup.py            # 去重引擎
 │   ├── governance/             # 治理模块
@@ -207,11 +226,15 @@ file-governance/
 │   │   ├── sensitivity.py      # 敏感信息脱敏初筛
 │   │   ├── quality.py          # 三维质量评分
 │   │   ├── planner.py          # 发布计划与问题清单
+│   │   ├── wiki_catalog.py     # 授权 Wiki 子树台账与节点映射
+│   │   ├── acceptance.py       # 统一发布验收
 │   │   └── audit.py            # 审计日志
 │   ├── publishers/             # 发布模块
 │   │   ├── feishu_drive.py     # 飞书云空间上传
+│   │   ├── feishu_docx.py      # 标准知识页创建/更新与回读
 │   │   ├── feishu_bitable.py   # 多维表格双表写入
-│   │   ├── dashboard.py        # Dashboard 刷新
+│   │   ├── feishu_tasks.py     # 到期复核任务
+│   │   ├── knowledge_graph.py  # 关系图与可选飞书画板
 │   │   └── reporter.py         # 结果卡片生成
 │   ├── models/                 # 数据模型
 │   │   └── file_record.py      # 文件记录模型
@@ -268,6 +291,22 @@ feishu:
     knowledge_table_id: ""
     agent_context_table_id: ""
     dashboard_id: ""
+  wiki:
+    enabled: false
+    space_id: ""
+    parent_node_token: ""
+
+knowledge_pages:
+  enabled: false
+  require_confirmation: true
+
+review_tasks:
+  enabled: false
+  owner_open_id: ""
+
+knowledge_graph:
+  enabled: false
+  whiteboard_token: ""
 
 governance:
   default_security_level: "L2-Internal"
@@ -296,6 +335,11 @@ taxonomy:
 - `base:record:delete` — 记录删除（全量刷新需要）
 - `drive:secure_label:update` — 密级设置
 - `drive:permission:update` — 共享权限设置
+- `docs:permission.setting:write_only` — 更新组织内链接访问策略
+- `docx:document:create` — 创建标准知识页（启用 knowledge_pages 时）
+- `docx:document:write_only` — 更新已有标准知识页
+- `task:task:write` — 创建复核任务（启用 review_tasks 时）
+- `board:whiteboard:node:create` — 同步知识关系图到飞书画板
 
 授权方式：已通过 `lark-cli auth login` 登录的设备自动复用，新增权限时 CLI 自动弹出设备码授权。
 
@@ -330,3 +374,5 @@ taxonomy:
 8. **先盘点再发布**：批量或高风险范围先输出资料台账与问题清单，确认后再写飞书
 9. **最小阶段执行**：盘点、发布、质量审核和增量维护可独立执行，避免每次重跑完整流程
 10. **AI 审核不替代业务审核**：三维评分用于排序与发现风险，P0 项必须人工确认
+11. **证据先于结论**：媒体没有 sidecar/OCR/ASR 证据、知识页未回读、权限命令失败时，不得标记发布成功
+12. **不虚构常驻能力**：只创建飞书复核任务和提醒，到期后由负责人或 Agent 再次调用
